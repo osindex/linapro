@@ -200,7 +200,7 @@ func newHTTPRuntime(ctx context.Context, configSvc config.Service) (*httpRuntime
 		roleSvc      = role.New(pluginSvc, bizCtxSvc, configSvc, i18nSvc, nil, orgCapSvc, tenantSvc)
 		scopeSvc     = datascope.New(bizCtxSvc, roleSvc, orgCapSvc)
 		dictSvc      = dict.New(i18nSvc)
-		menuSvc      = menu.New(pluginSvc, i18nSvc, roleSvc)
+		menuSvc      = menu.New(pluginSvc, i18nSvc, roleSvc, tenantSvc)
 		notifySvc    = notify.New(tenantSvc)
 		authSvc      = auth.New(configSvc, pluginSvc, orgCapSvc, roleSvc, tenantSvc, sessionStore, kvCacheSvc)
 		fileStorage  = file.NewLocalStorage(configSvc.GetUploadPath(ctx))
