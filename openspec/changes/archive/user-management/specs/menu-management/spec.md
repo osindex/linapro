@@ -1,130 +1,44 @@
 ## ADDED Requirements
 
-### Requirement: Menu List Query
+### Requirement: 全局菜单治理写操作必须要求平台上下文
 
-The system MUST support tree-structured menu list queries returning all menus with their hierarchy.
+系统 SHALL 将 `sys_menu` 视为全局权限拓扑和菜单治理资源。菜单创建、更新、删除、状态变更、可见性变更以及其他会修改 `sys_menu` 或 `sys_role_menu` 全局拓扑的菜单治理写操作 MUST 要求平台上下文和对应权限字符串。租户上下文不得直接写入全局菜单模型。
 
-#### Scenario: Query menu tree list
-- **WHEN** a user visits the menu management page
-- **THEN** the system returns a tree-structured menu list including all directory, menu, and button types
-- **AND** each menu node contains id, parentId, name, path, icon, type, sort, visible, status, etc.
-- **AND** child menus are nested in the parent menu's children field
+#### Scenario: 租户上下文创建菜单被拒绝
 
-#### Scenario: Filter menus by condition
-- **WHEN** a user enters a menu name for search
-- **THEN** the system returns menus whose name contains the keyword (fuzzy match)
-- **AND** the results maintain tree structure
+- **WHEN** 租户用户具备历史或异常 `system:menu:add` 权限
+- **AND** 调用菜单创建接口
+- **THEN** 系统 MUST 返回结构化权限错误
+- **AND** 不向 `sys_menu` 写入任何记录
+- **AND** 不发布声称菜单拓扑已变更的成功响应
 
-### Requirement: Menu Detail Query
+#### Scenario: 租户上下文更新或删除菜单被拒绝
 
-The system MUST support querying menu details by menu ID.
+- **WHEN** 租户用户调用菜单更新、删除、启用、禁用或显隐切换接口
+- **THEN** 系统 MUST 拒绝操作
+- **AND** 不修改 `sys_menu`
+- **AND** 不删除或新增 `sys_role_menu` 关联
 
-#### Scenario: Query existing menu detail
-- **WHEN** a user clicks the edit button in the menu list
-- **THEN** the system returns the complete menu information including parent menu name
+#### Scenario: 平台上下文写菜单后失效权限拓扑缓存
 
-#### Scenario: Query non-existent menu
-- **WHEN** a user requests a non-existent menu ID
-- **THEN** the system returns an error message "menu does not exist"
+- **WHEN** 平台管理员在平台上下文成功创建、更新或删除菜单
+- **THEN** 系统提交菜单治理变更
+- **AND** 可靠发布访问拓扑缓存修订号
+- **AND** 集群内其他节点在权限缓存域允许陈旧窗口内丢弃旧权限拓扑
 
-### Requirement: Create Menu
+### Requirement: 角色菜单树必须按授权上下文过滤
 
-The system MUST support creating new menus including directory, menu, and button types.
+角色授权使用的菜单树 SHALL 按当前操作者上下文过滤为可分配集合。该过滤只影响授权展示和提交校验，不改变 `sys_menu` 的全局存储结构。
 
-#### Scenario: Create directory type menu
-- **WHEN** a user fills in directory information (name, icon, sort, visibility, status) and submits
-- **THEN** the system creates a directory type menu with type "D"
-- **AND** the system automatically sets created_at and updated_at
-- **AND** the directory type's path field is used for route grouping
+#### Scenario: 租户授权树不返回平台目录
 
-#### Scenario: Create menu type menu
-- **WHEN** a user fills in menu information (name, route address, component path, permission key, icon, sort, visibility, cache flag, status) and submits
-- **THEN** the system creates a menu type menu with type "M"
-- **AND** menu type must have path and component fields
+- **WHEN** 租户管理员请求角色菜单树
+- **THEN** 响应不包含平台管理目录
+- **AND** 不包含平台租户管理、平台插件治理或全局菜单治理写权限节点
+- **AND** 已有租户角色中异常绑定的 platform-only checked key 不得返回为可勾选授权项
 
-#### Scenario: Create button type menu
-- **WHEN** a user fills in button information (name, permission key, parent menu) and submits
-- **THEN** the system creates a button type menu with type "B"
-- **AND** button type has no path, component, or icon fields
+#### Scenario: 平台授权树保留平台目录
 
-#### Scenario: Create external link menu
-- **WHEN** a user creates a menu and sets is_frame to 1
-- **THEN** the system treats the path as an external link address
-- **AND** clicking the menu in the frontend opens the external link in a new window
-
-#### Scenario: Duplicate menu name
-- **WHEN** a user creates a menu with an existing name
-- **THEN** the system returns an error message "menu name already exists"
-
-### Requirement: Update Menu
-
-The system MUST support updating menu information.
-
-#### Scenario: Update menu information
-- **WHEN** a user modifies menu information and submits
-- **THEN** the system updates the menu's updated_at timestamp
-- **AND** the system updates all editable fields of the menu
-
-#### Scenario: Update non-existent menu
-- **WHEN** a user attempts to update a non-existent menu
-- **THEN** the system returns an error message "menu does not exist"
-
-#### Scenario: Parent menu selection restriction when editing
-- **WHEN** a user opens the parent menu selector while editing a menu
-- **THEN** the system grays out and disables the current menu and all its descendants in the tree
-- **AND** disabled nodes cannot be selected
-- **AND** no nodes are disabled when adding a new menu
-
-#### Scenario: Parent menu selection when adding
-- **WHEN** a user opens the parent menu selector while adding a new menu
-- **THEN** all menu nodes are selectable
-- **AND** no nodes are disabled
-
-### Requirement: Delete Menu
-
-The system MUST support deleting menus with cascade deletion of child menus.
-
-#### Scenario: Delete menu without children
-- **WHEN** a user deletes a menu that has no children
-- **THEN** the system soft-deletes the menu (sets deleted_at)
-- **AND** the system deletes the menu's association records from sys_role_menu
-
-#### Scenario: Delete menu with children
-- **WHEN** a user deletes a menu that has children
-- **THEN** the system prompts "child menus exist, cascade delete?"
-- **AND** after user confirmation, deletes the menu and all its children
-- **AND** deletes all related role-menu associations
-
-### Requirement: Menu Dropdown Tree
-
-The system MUST provide a menu dropdown tree endpoint for role menu assignment.
-
-#### Scenario: Get menu dropdown tree
-- **WHEN** role menu assignment requests the menu tree
-- **THEN** the system returns a tree-structured menu list
-- **AND** filters out button type (type="B") menus
-- **AND** each node contains id, parentId, label, children
-
-### Requirement: Role Menu Tree
-
-The system MUST provide an endpoint to get a specific role's menu tree for displaying assigned menus during role editing.
-
-#### Scenario: Get role menu permissions
-- **WHEN** editing a role and requesting its menu tree
-- **THEN** the system returns the complete menu tree
-- **AND** returns the role's assigned menu ID list (checkedKeys)
-- **AND** assigned menus are shown as checked in the menu tree
-
-### Requirement: Menu Status Control
-
-The system MUST support enabling/disabling menu status.
-
-#### Scenario: Disable menu
-- **WHEN** a user changes a menu's status to disabled
-- **THEN** the menu does not appear in the frontend menu bar
-- **AND** direct URL access to the menu route is rejected by the frontend
-
-#### Scenario: Hide menu
-- **WHEN** a user sets a menu's visible field to hidden
-- **THEN** the menu does not appear in the frontend menu bar
-- **AND** the user can still access the menu via direct URL
+- **WHEN** 平台管理员在平台上下文请求角色菜单树
+- **THEN** 响应可包含平台管理目录和平台治理权限
+- **AND** 仍按插件启用状态、菜单状态和既有授权展示层级规则组织树结构

@@ -1,139 +1,38 @@
 ## ADDED Requirements
 
-### Requirement: Role List Query
+### Requirement: 角色授权必须限制为当前上下文可分配权限
 
-The system MUST support paginated role queries.
+系统 SHALL 在角色新增、编辑和角色菜单授权树中使用同一套当前上下文可分配权限集合。租户上下文只能分配当前租户业务允许的菜单和按钮权限；平台租户管理、平台插件治理、全局菜单治理写操作以及其他 platform-only 权限不得出现在租户角色授权树中，也不得通过 API 提交写入租户角色。
 
-#### Scenario: Query role list
-- **WHEN** a user visits the role management page
-- **THEN** the system returns a paginated role list
-- **AND** each role contains id, name, key, sort, dataScope, status, remark, createdAt, etc.
-- **AND** supports filtering by role name, permission key, and status
+#### Scenario: 租户角色授权树排除平台权限
 
-#### Scenario: Filter roles by condition
-- **WHEN** a user enters a role name or selects a status for search
-- **THEN** the system returns matching role list
+- **WHEN** 租户管理员打开角色新增或编辑抽屉
+- **THEN** 角色菜单授权树不包含平台租户管理菜单和按钮
+- **AND** 不包含插件安装、卸载、同步、上传、安装模式和新租户自动启用策略等平台治理权限
+- **AND** 不包含全局菜单治理写权限
 
-### Requirement: Role Detail Query
+#### Scenario: 租户角色提交平台菜单 ID 被拒绝
 
-The system MUST support querying role details by role ID.
+- **WHEN** 租户管理员绕过前端调用角色创建或更新接口
+- **AND** 请求 `menuIds` 包含 platform-only 菜单或按钮 ID
+- **THEN** 系统 MUST 拒绝整个角色写入
+- **AND** 不创建或更新 `sys_role_menu` 中任何不允许的授权关系
+- **AND** 返回稳定可本地化业务错误
 
-#### Scenario: Query existing role detail
-- **WHEN** a user clicks the edit button in the role list
-- **THEN** the system returns the complete role information
-- **AND** returns the role's assigned menu ID list
+#### Scenario: 平台上下文可以分配平台治理权限
 
-#### Scenario: Query non-existent role
-- **WHEN** a user requests a non-existent role ID
-- **THEN** the system returns an error message "role does not exist"
+- **WHEN** 平台管理员处于平台上下文并编辑平台角色
+- **AND** 请求 `menuIds` 包含平台租户管理或插件平台治理权限
+- **THEN** 系统在满足既有角色保护规则后允许写入这些授权
+- **AND** 写入后发布访问拓扑缓存修订号
 
-### Requirement: Create Role
+### Requirement: 异常历史授权不得提升租户访问边界
 
-The system MUST support creating new roles.
+系统 SHALL 在用户权限解析和受保护 API 边界上保证异常历史授权不会把租户上下文提升为平台上下文。租户角色中已有的 platform-only 菜单关系可以被治理任务后续清理，但在本变更后不得使平台控制面 API 成功。
 
-#### Scenario: Create role
-- **WHEN** a user fills in role information (name, permission key, sort, data scope, status, remark) and submits
-- **THEN** the system creates a role record
-- **AND** the system automatically sets created_at and updated_at
+#### Scenario: 历史 platform-only 授权不授予平台接口访问
 
-#### Scenario: Duplicate role name
-- **WHEN** a user creates a role with an existing name
-- **THEN** the system returns an error message "role name already exists"
-
-#### Scenario: Duplicate permission key
-- **WHEN** a user creates a role with an existing permission key
-- **THEN** the system returns an error message "permission key already exists"
-
-### Requirement: Update Role
-
-The system MUST support updating role information.
-
-#### Scenario: Update role basic information
-- **WHEN** a user modifies role information and submits
-- **THEN** the system updates the role's updated_at timestamp
-- **AND** the system updates all editable fields of the role
-
-#### Scenario: Update role menu permissions
-- **WHEN** a user modifies role menu assignment and submits
-- **THEN** the system deletes old sys_role_menu association records
-- **AND** the system inserts new sys_role_menu association records
-- **AND** menu assignment uses parent-child linkage mode
-
-#### Scenario: Update non-existent role
-- **WHEN** a user attempts to update a non-existent role
-- **THEN** the system returns an error message "role does not exist"
-
-### Requirement: Delete Role
-
-The system MUST support deleting roles.
-
-#### Scenario: Delete unassigned role
-- **WHEN** a user deletes a role that is not assigned to any user
-- **THEN** the system soft-deletes the role (sets deleted_at)
-- **AND** deletes sys_role_menu and sys_user_role association records
-
-#### Scenario: Delete assigned role
-- **WHEN** a user attempts to delete a role assigned to users
-- **THEN** the system prompts "this role is assigned to X users, confirm deletion?"
-- **AND** after user confirmation, deletes the role and removes user assignments
-
-#### Scenario: Delete super admin role
-- **WHEN** a user attempts to delete the admin role
-- **THEN** the system returns an error message "cannot delete super admin role"
-
-### Requirement: Role Status Control
-
-The system MUST support enabling/disabling role status.
-
-#### Scenario: Disable role
-- **WHEN** a user changes a role's status to disabled
-- **THEN** users assigned this role cannot get its menu permissions on login
-
-#### Scenario: Enable role
-- **WHEN** a user changes a disabled role's status to enabled
-- **THEN** users assigned this role can get its menu permissions after re-login
-
-### Requirement: Role Dropdown Options
-
-The system MUST provide a role dropdown options endpoint for user management role selection.
-
-#### Scenario: Get role dropdown options
-- **WHEN** the user management page loads the user form
-- **THEN** the system returns all enabled roles
-- **AND** each option contains id, name, key fields
-
-### Requirement: Role User Assignment
-
-The system MUST support assigning users to roles.
-
-#### Scenario: View role's user list
-- **WHEN** a user clicks the role's "assign" button
-- **THEN** the system navigates to the role user management page
-- **AND** displays users assigned to this role
-- **AND** the user list supports pagination and search
-
-#### Scenario: Remove user authorization
-- **WHEN** a user clicks "remove authorization" in the role user list
-- **THEN** the system deletes the corresponding sys_user_role record
-- **AND** the user list automatically refreshes
-
-#### Scenario: Batch authorize users
-- **WHEN** a user selects multiple unassigned users and clicks "authorize"
-- **THEN** the system batch-inserts sys_user_role records
-- **AND** these users can get this role's menu permissions after re-login
-
-### Requirement: Data Permission Scope
-
-The system MUST support three simplified data-scope levels.
-
-#### Scenario: Set all data permissions
-- **WHEN** a role's dataScope is set to 1
-- **THEN** the role can view all data (actual filtering logic not implemented yet)
-
-#### Scenario: Set department data permissions
-- **WHEN** a role's dataScope is set to 2
-- **THEN** the role can only view own department data (actual filtering logic not implemented yet)
-
-#### Scenario: Set self-only data permissions
-- **WHEN** a role's dataScope is set to 3
-- **THEN** the role can only view self-created data (actual filtering logic not implemented yet)
+- **WHEN** 租户角色历史上已绑定 `system:tenant:list` 对应菜单
+- **AND** 租户用户重新登录获得权限快照
+- **THEN** 平台租户控制面接口仍按平台上下文 guard 拒绝访问
+- **AND** 租户用户不得读取其他租户数据
