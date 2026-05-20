@@ -1061,6 +1061,27 @@ func TestGoWorkspaceModulesIncludesGoListOutputInErrors(t *testing.T) {
 	}
 }
 
+// TestGoWorkspaceModulesIncludesStdoutDiagnosticInErrors verifies failure
+// diagnostics are preserved for tools that write errors to stdout.
+func TestGoWorkspaceModulesIncludesStdoutDiagnosticInErrors(t *testing.T) {
+	application := newApp(ioDiscard{}, ioDiscard{}, strings.NewReader(""))
+	application.root = t.TempDir()
+	application.execCommand = func(_ context.Context, name string, args ...string) *exec.Cmd {
+		if name != "go" || strings.Join(args, " ") != "list -m -f {{.Dir}}" {
+			t.Fatalf("unexpected module list command: %s %s", name, strings.Join(args, " "))
+		}
+		return exec.Command(os.Args[0], "-test.run=TestHelperPrintStdoutAndFail", "--")
+	}
+
+	_, err := goWorkspaceModules(context.Background(), application)
+	if err == nil {
+		t.Fatalf("expected goWorkspaceModules to return an error")
+	}
+	if !strings.Contains(err.Error(), "stdout diagnostic from go list") {
+		t.Fatalf("expected stdout diagnostic in error, got %v", err)
+	}
+}
+
 // TestRunTestGoSerializesPackageExecution verifies CI uses one package process
 // at a time while retaining the requested race and verbose flags for packages
 // that actually contain Go tests.
@@ -1126,6 +1147,35 @@ func TestGoTestModulePlanForDirSeparatesTestAndCompilePackages(t *testing.T) {
 	}
 	if !samePath(t, plan.ModuleDir, moduleDir) {
 		t.Fatalf("unexpected module dir: %s", plan.ModuleDir)
+	}
+	if got := strings.Join(plan.TestPackages, ","); got != "lina-core/internal/service/plugin" {
+		t.Fatalf("unexpected test packages: %s", got)
+	}
+	if got := strings.Join(plan.CompilePackages, ","); got != "lina-core/internal/model" {
+		t.Fatalf("unexpected compile packages: %s", got)
+	}
+}
+
+// TestGoTestModulePlanForDirIgnoresStderrDiagnostics verifies Go discovery
+// parses only stdout JSON so harmless go: diagnostics on stderr do not corrupt
+// the package stream.
+func TestGoTestModulePlanForDirIgnoresStderrDiagnostics(t *testing.T) {
+	root := t.TempDir()
+	moduleDir := filepath.Join(root, "apps", "lina-core")
+	writeFile(t, filepath.Join(moduleDir, "go.mod"), "module lina-core\n")
+
+	application := newApp(ioDiscard{}, ioDiscard{}, strings.NewReader(""))
+	application.root = root
+	application.execCommand = func(_ context.Context, name string, args ...string) *exec.Cmd {
+		if name != "go" || strings.Join(args, " ") != "list -json ./..." {
+			t.Fatalf("unexpected package list command: %s %s", name, strings.Join(args, " "))
+		}
+		return exec.Command(os.Args[0], "-test.run=TestHelperPrintGoListPackagesWithStderr", "--")
+	}
+
+	plan, err := goTestModulePlanForDir(context.Background(), application, moduleDir)
+	if err != nil {
+		t.Fatalf("goTestModulePlanForDir returned error: %v", err)
 	}
 	if got := strings.Join(plan.TestPackages, ","); got != "lina-core/internal/service/plugin" {
 		t.Fatalf("unexpected test packages: %s", got)
@@ -1498,6 +1548,16 @@ func TestHelperPrintAndFail(t *testing.T) {
 	os.Exit(1)
 }
 
+// TestHelperPrintStdoutAndFail prints a deterministic stdout diagnostic and
+// exits with failure for command-output error tests.
+func TestHelperPrintStdoutAndFail(t *testing.T) {
+	if len(os.Args) < 2 || os.Args[len(os.Args)-1] != "--" {
+		return
+	}
+	fmt.Fprintln(os.Stdout, "stdout diagnostic from go list")
+	os.Exit(1)
+}
+
 // TestHelperRecordWorkingDirectory records the child process working directory
 // for command execution tests.
 func TestHelperRecordWorkingDirectory(t *testing.T) {
@@ -1546,6 +1606,18 @@ func TestHelperPrintGoListPackages(t *testing.T) {
 	if len(os.Args) < 2 || os.Args[len(os.Args)-1] != "--" {
 		return
 	}
+	fmt.Fprintln(os.Stdout, `{"ImportPath":"lina-core/internal/service/plugin","TestGoFiles":["plugin_test.go"]}`)
+	fmt.Fprintln(os.Stdout, `{"ImportPath":"lina-core/internal/model"}`)
+	os.Exit(0)
+}
+
+// TestHelperPrintGoListPackagesWithStderr prints go list JSON on stdout while
+// emitting a diagnostic to stderr, matching Go tool output seen in CI.
+func TestHelperPrintGoListPackagesWithStderr(t *testing.T) {
+	if len(os.Args) < 2 || os.Args[len(os.Args)-1] != "--" {
+		return
+	}
+	fmt.Fprintln(os.Stderr, "go: downloading example.com/transitive v0.0.1")
 	fmt.Fprintln(os.Stdout, `{"ImportPath":"lina-core/internal/service/plugin","TestGoFiles":["plugin_test.go"]}`)
 	fmt.Fprintln(os.Stdout, `{"ImportPath":"lina-core/internal/model"}`)
 	os.Exit(0)
