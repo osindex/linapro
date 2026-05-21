@@ -14,6 +14,18 @@ on:
         required: false
         type: string
         default: "1.3.1"
+      # Selects the branch whose OpenSpec state should be archived.
+      # 选择需要执行 OpenSpec 归档的目标分支。
+      target_branch:
+        description: Branch whose OpenSpec state should be archived.
+        required: true
+        type: string
+      # Selects the archive pull request source branch.
+      # 选择归档 Pull Request 的来源分支。
+      pr_branch:
+        description: Pull request head branch for generated archive changes.
+        required: true
+        type: string
       # Allows GitHub Variables to provide the GitHub Copilot CLI model name.
       # 允许通过 GitHub Variables 提供 GitHub Copilot CLI 模型名称。
       copilot_model:
@@ -45,6 +57,8 @@ permissions:
 env:
   TZ: "Asia/Shanghai"
   OPENSPEC_VERSION: ${{ inputs.openspec_version }}
+  TARGET_BRANCH: ${{ inputs.target_branch }}
+  ARCHIVE_PR_BRANCH: ${{ inputs.pr_branch }}
   COPILOT_MODEL_INPUT: ${{ inputs.copilot_model }}
   COPILOT_REASONING_EFFORT_INPUT: ${{ inputs.copilot_reasoning_effort }}
 
@@ -57,12 +71,12 @@ jobs:
     timeout-minutes: 120
 
     steps:
-      # Check out the default branch with full history so archive branches can be created.
-      # 拉取默认分支完整历史，以便创建归档分支。
+      # Check out the selected target branch with full history so archive branches can be created.
+      # 拉取选定目标分支完整历史，以便创建归档分支。
       - name: Checkout Repository
         uses: actions/checkout@v5
         with:
-          ref: ${{ github.event.repository.default_branch }}
+          ref: ${{ env.TARGET_BRANCH }}
           fetch-depth: 0
 
       # Install shared Node/OpenSpec/GitHub CLI prerequisites used by both archive phases.
@@ -194,7 +208,8 @@ jobs:
         with:
           changed: ${{ steps.archive-diff.outputs.changed }}
           openspec-version: ${{ env.OPENSPEC_VERSION }}
-          base-branch: ${{ github.event.repository.default_branch }}
+          base-branch: ${{ env.TARGET_BRANCH }}
+          pr-branch: ${{ env.ARCHIVE_PR_BRANCH }}
 
       # Fail after PR finalization when deterministic archive left completed candidates behind.
       # 当确定性归档仍遗留已完成候选时，在 PR 收尾后失败。
