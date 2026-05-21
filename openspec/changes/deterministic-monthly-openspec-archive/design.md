@@ -2,25 +2,23 @@
 
 ## Context
 
-The monthly archive workflow already has deterministic candidate detection and post-archive assertions. The weak point is the base archive execution: it relies on Codex, Claude Code, or GitHub Copilot CLI to interpret the prompt and run `lina-auto-archive`. In the failed GitHub Actions run, GitHub Copilot CLI returned success but completed active changes remained under `openspec/changes/`.
+The monthly archive workflow already has deterministic candidate detection. The weak point is the base archive execution and later failure handling: earlier revisions allowed selected archive phases to fail and still continue by restoring a deterministic snapshot or emitting a manual PR URL. In the failed GitHub Actions run, GitHub Copilot CLI returned success but completed active changes remained under `openspec/changes/`, and a later run showed archive consolidation could fail while the workflow still finalized a PR without consolidation.
 
-A local replay at the failed commit showed that direct `openspec archive -y` can archive most candidates, while `remove-sqlite-support` fails because one REMOVED requirement header does not exist in the current baseline spec. This is a good fit for deterministic automation: the workflow can archive everything that OpenSpec can apply, report exact failures, open a PR for successful archives, and then fail to force maintainers to address remaining blockers.
+A local replay at the failed commit showed that `openspec archive -y` can archive most candidates, while `remove-sqlite-support` fails because one REMOVED requirement header does not exist in the current baseline spec. The monthly workflow should still keep archive execution inside the configured tool runtime so the base archive phase and the archive consolidation phase use the same Codex, Claude Code, or GitHub Copilot CLI execution model. It must also use GitHub Actions' default fail-fast behavior: once any archive, consolidation, validation, push, or PR step fails, no later archive steps should run.
 
 ## Approach
 
-Add a shared composite action `.github/actions/monthly-openspec-auto-archive` that:
+Add a shared `.github/prompts/monthly-openspec-auto-archive.zh-CN.md` prompt that instructs the selected AI coding tool to invoke the repository's `lina-auto-archive` skill. The prompt requires active-change scanning, conservative completion checks, `openspec archive -y "<change-name>"` for each safe candidate, post-archive active-list confirmation, `openspec/**`-only changes, and no human interaction in CI.
 
-- Runs `openspec list --json` with the pinned CLI version.
-- Selects active changes with status `complete`, `completed`, or `done`.
-- Treats mismatched `completedTasks` / `totalTasks` counts as an archive failure when OpenSpec reports task counts.
-- Runs `openspec archive -y <change>` for each candidate in a stable order.
-- Rechecks `openspec list --json` after each archive command so a candidate is only considered archived after it leaves the active change list.
-- Records successful and failed changes in JSON outputs and the job summary.
-- Outputs `had-failures=true` when any archive command fails or when a candidate remains active after the command returns.
+The tool-specific reusable workflows prepare their own runtime first, then run `Run Lina Auto Archive` through that runtime:
 
-The tool-specific reusable workflows will call this deterministic action before AI runtime setup. They will then detect archive diffs and only prepare/run Codex, Claude Code, or GitHub Copilot CLI for consolidation when deterministic archiving produced changes. Final PR creation should happen before a final failure gate, so partially successful archive runs still write an archive PR while the job fails if any completed changes were not archived.
+- Codex uses `loads/codex:latest` and `codex exec`.
+- Claude Code uses `loads/cc:latest` and the existing `run-cc-task` wrapper.
+- GitHub Copilot CLI uses `@github/copilot` and `copilot -p`.
 
-The existing `monthly-openspec-assert-archive-complete` action stays as the final gate, but it moves after PR finalization and runs only when deterministic archiving reported failures. That preserves a failing job for unresolved blockers and keeps the summary of remaining completed active changes.
+After the selected tool completes auto-archive, the workflow detects OpenSpec diffs, validates the archive result, and only then runs archive consolidation through the same tool runtime. If auto-archive fails, the workflow stops at that tool step and does not continue to consolidation or PR finalization.
+
+The tool-specific reusable workflows must not use `continue-on-error` around auto-archive, archive consolidation, temporary change cleanup, or validation. They must also avoid rollback-to-snapshot behavior after consolidation fails because that hides the actual failed phase and produces an archive PR that does not reflect the requested aggregation. Pull request creation and update failures are hard failures, including repository policy errors that block `GITHUB_TOKEN` from creating or editing pull requests.
 
 ## Scope
 
