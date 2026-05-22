@@ -19,7 +19,12 @@ import { $t } from '#/locales';
 import { useAuthStore } from '#/store';
 import { useTenantStore } from '#/store/tenant';
 
-const { apiURL } = useAppConfig(import.meta.env, import.meta.env.PROD);
+const defaultApiURL = '/api/v1';
+const { apiURL: configuredApiURL } = useAppConfig(
+  import.meta.env,
+  import.meta.env.PROD,
+);
+const apiURL = normalizeApiBaseURL(configuredApiURL);
 const pluginApiOrigin = resolvePluginApiOrigin(apiURL);
 
 type RuntimeErrorResponse = {
@@ -38,6 +43,11 @@ type RefreshTokenEnvelope = RuntimeErrorResponse & {
 };
 
 const refreshRequestClient = new RequestClient({ baseURL: apiURL });
+
+function normalizeApiBaseURL(baseURL: unknown) {
+  const normalized = typeof baseURL === 'string' ? baseURL.trim() : '';
+  return normalized || defaultApiURL;
+}
 
 function resolveRequestLocale() {
   if (typeof document === 'undefined') {
