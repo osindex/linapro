@@ -8,7 +8,7 @@ import (
 	"os"
 	"strings"
 
-	"lina-core/pkg/pluginbridge"
+	"lina-core/pkg/plugin/pluginbridge/protocol"
 )
 
 func buildRuntimeArtifactContent(
@@ -19,11 +19,12 @@ func buildRuntimeArtifactContent(
 	installSQLAssets []*sqlAsset,
 	uninstallSQLAssets []*sqlAsset,
 	mockSQLAssets []*sqlAsset,
+	manifestResources []*manifestResource,
 	hookSpecs []*hookSpec,
-	lifecycleSpecs []*lifecycleSpec,
+	lifecycleSpecs []*protocol.LifecycleContract,
 	resourceSpecs []*resourceSpec,
-	routeContracts []*pluginbridge.RouteContract,
-	bridgeSpec *pluginbridge.BridgeSpec,
+	routeContracts []*protocol.RouteContract,
+	bridgeSpec *protocol.BridgeSpec,
 	runtimePath string,
 ) ([]byte, error) {
 	manifestPayload, err := json.Marshal(&dynamicArtifactManifest{
@@ -42,15 +43,16 @@ func buildRuntimeArtifactContent(
 	if err != nil {
 		return nil, err
 	}
-	runtimePayload, err := json.Marshal(&dynamicArtifactMetadata{
-		RuntimeKind:          pluginDynamicKindWasm,
-		ABIVersion:           pluginDynamicSupportedABIVersion,
-		FrontendAssetCount:   len(frontendAssets),
-		I18NAssetCount:       len(i18nAssets),
-		APIDocI18NAssetCount: len(apiDocI18NAssets),
-		SQLAssetCount:        len(installSQLAssets) + len(uninstallSQLAssets) + len(mockSQLAssets),
-		MockSQLAssetCount:    len(mockSQLAssets),
-		RouteCount:           len(routeContracts),
+	runtimePayload, err := json.Marshal(&protocol.RuntimeArtifactMetadata{
+		RuntimeKind:           pluginDynamicKindWasm,
+		ABIVersion:            pluginDynamicSupportedABIVersion,
+		FrontendAssetCount:    len(frontendAssets),
+		I18NAssetCount:        len(i18nAssets),
+		APIDocI18NAssetCount:  len(apiDocI18NAssets),
+		SQLAssetCount:         len(installSQLAssets) + len(uninstallSQLAssets) + len(mockSQLAssets),
+		MockSQLAssetCount:     len(mockSQLAssets),
+		ManifestResourceCount: len(manifestResources),
+		RouteCount:            len(routeContracts),
 	})
 	if err != nil {
 		return nil, err
@@ -108,6 +110,13 @@ func buildRuntimeArtifactContent(
 			return nil, err
 		}
 		content = appendWasmCustomSection(content, pluginDynamicWasmSectionMockSQL, payload)
+	}
+	if len(manifestResources) > 0 {
+		payload, err := json.Marshal(manifestResources)
+		if err != nil {
+			return nil, err
+		}
+		content = appendWasmCustomSection(content, pluginDynamicWasmSectionManifestResources, payload)
 	}
 	if len(hookSpecs) > 0 {
 		payload, err := json.Marshal(hookSpecs)
@@ -169,16 +178,9 @@ func cloneBuildDependencySpec(spec *dependencySpec) *dependencySpec {
 				clone.Plugins = append(clone.Plugins, nil)
 				continue
 			}
-			var required *bool
-			if dependency.Required != nil {
-				value := *dependency.Required
-				required = &value
-			}
 			clone.Plugins = append(clone.Plugins, &pluginDependencySpec{
-				ID:       strings.TrimSpace(dependency.ID),
-				Version:  strings.TrimSpace(dependency.Version),
-				Required: required,
-				Install:  strings.TrimSpace(dependency.Install),
+				ID:      strings.TrimSpace(dependency.ID),
+				Version: strings.TrimSpace(dependency.Version),
 			})
 		}
 	}

@@ -9,171 +9,178 @@ import (
 	"time"
 
 	"github.com/gogf/gf/v2/container/gvar"
-	"github.com/gogf/gf/v2/frame/g"
-	"github.com/gogf/gf/v2/os/gcfg"
+	"github.com/gogf/gf/v2/errors/gerror"
 
-	"lina-core/pkg/pluginbridge"
+	"lina-core/pkg/plugin/capability/contract"
+	"lina-core/pkg/plugin/pluginbridge/protocol"
 )
 
-// trackingConfigService records config reads while returning deterministic
-// values for shared-instance wiring tests.
+// trackingConfigFactory records plugin scopes requested by the wasm dispatcher.
+type trackingConfigFactory struct {
+	service             *trackingConfigService
+	lastPluginID        string
+	lastArtifactPlugin  string
+	lastArtifactContent string
+}
+
+// ForPlugin returns the configured tracking service for one plugin scope.
+func (f *trackingConfigFactory) ForPlugin(pluginID string) contract.ConfigService {
+	f.lastPluginID = pluginID
+	return f.service
+}
+
+// WithArtifactConfig records release-bound default config passed by the execution context.
+func (f *trackingConfigFactory) WithArtifactConfig(pluginID string, content []byte) contract.ConfigServiceFactory {
+	f.lastArtifactPlugin = pluginID
+	f.lastArtifactContent = string(content)
+	return f
+}
+
+// trackingConfigService records config reads while returning deterministic values.
 type trackingConfigService struct {
+	values      map[string]any
 	getCalls    int
 	existsCalls int
-	stringCalls int
 	lastKey     string
 }
 
 // Get records one raw config read.
 func (s *trackingConfigService) Get(_ context.Context, key string) (*gvar.Var, error) {
+	if strings.TrimSpace(key) == "" || strings.TrimSpace(key) == "." {
+		return nil, gerror.New("plugin config key cannot be empty or root")
+	}
 	s.getCalls++
 	s.lastKey = key
-	return gvar.New("shared-value"), nil
+	if value, ok := s.values[key]; ok {
+		return gvar.New(value), nil
+	}
+	return nil, nil
 }
 
 // Exists records one config existence read.
 func (s *trackingConfigService) Exists(_ context.Context, key string) (bool, error) {
+	if strings.TrimSpace(key) == "" || strings.TrimSpace(key) == "." {
+		return false, gerror.New("plugin config key cannot be empty or root")
+	}
 	s.existsCalls++
 	s.lastKey = key
-	return true, nil
+	_, ok := s.values[key]
+	return ok, nil
 }
 
-// Scan records no behavior for the shared config fake.
+// Scan records no behavior for the config fake.
 func (s *trackingConfigService) Scan(context.Context, string, any) error { return nil }
 
-// String records one string config read.
-func (s *trackingConfigService) String(_ context.Context, key string, _ string) (string, error) {
-	s.stringCalls++
-	s.lastKey = key
-	return "shared-string", nil
+// String reads a deterministic string value.
+func (s *trackingConfigService) String(ctx context.Context, key string, defaultValue string) (string, error) {
+	value, err := s.Get(ctx, key)
+	if err != nil || value == nil || value.IsNil() {
+		return defaultValue, err
+	}
+	return value.String(), nil
 }
 
-// Bool returns a deterministic bool value.
-func (s *trackingConfigService) Bool(context.Context, string, bool) (bool, error) { return true, nil }
+// Bool reads a deterministic bool value.
+func (s *trackingConfigService) Bool(ctx context.Context, key string, defaultValue bool) (bool, error) {
+	value, err := s.Get(ctx, key)
+	if err != nil || value == nil || value.IsNil() {
+		return defaultValue, err
+	}
+	return value.Bool(), nil
+}
 
-// Int returns a deterministic int value.
-func (s *trackingConfigService) Int(context.Context, string, int) (int, error) { return 7, nil }
+// Int reads a deterministic int value.
+func (s *trackingConfigService) Int(ctx context.Context, key string, defaultValue int) (int, error) {
+	value, err := s.Get(ctx, key)
+	if err != nil || value == nil || value.IsNil() {
+		return defaultValue, err
+	}
+	return value.Int(), nil
+}
 
 // Duration returns a deterministic duration value.
 func (s *trackingConfigService) Duration(context.Context, string, time.Duration) (time.Duration, error) {
 	return 15 * time.Second, nil
 }
 
-// TestHandleHostServiceInvokeConfigReadsValues verifies dynamic plugins can
-// read arbitrary host configuration values through the config host service.
+// TestHandleHostServiceInvokeConfigReadsValues verifies dynamic plugins read
+// plugin-scoped config values through config.get only.
 func TestHandleHostServiceInvokeConfigReadsValues(t *testing.T) {
-	setWasmConfigAdapter(t, `
-monitor:
-  interval: 45s
-  retentionMultiplier: 8
-feature:
-  enabled: true
-  retries: 3
-`)
-
-	hcc := configHostCallContext()
+	configSvc := &trackingConfigService{values: map[string]any{
+		"monitor.interval": "45s",
+		"feature.enabled":  true,
+		"feature.retries":  3,
+	}}
+	factory := configureTrackingConfigFactory(t, configSvc)
 
 	getResponse := invokeConfigHostService(
 		t,
-		hcc,
-		pluginbridge.HostServiceMethodConfigGet,
+		configHostCallContext(),
+		protocol.HostServiceMethodConfigGet,
 		"monitor.interval",
 	)
 	getPayload := decodeConfigResponse(t, getResponse)
 	if !getPayload.Found || getPayload.Value != `"45s"` {
 		t.Fatalf("expected monitor.interval JSON value, got %#v", getPayload)
 	}
-
-	stringResponse := invokeConfigHostService(
-		t,
-		hcc,
-		pluginbridge.HostServiceMethodConfigString,
-		"monitor.interval",
-	)
-	stringPayload := decodeConfigResponse(t, stringResponse)
-	if !stringPayload.Found || stringPayload.Value != "45s" {
-		t.Fatalf("expected monitor.interval string value, got %#v", stringPayload)
+	if factory.lastPluginID != "test-plugin-config" {
+		t.Fatalf("expected config factory to be scoped to plugin, got %q", factory.lastPluginID)
 	}
 
 	boolResponse := invokeConfigHostService(
 		t,
-		hcc,
-		pluginbridge.HostServiceMethodConfigBool,
+		configHostCallContext(),
+		protocol.HostServiceMethodConfigGet,
 		"feature.enabled",
 	)
 	boolPayload := decodeConfigResponse(t, boolResponse)
-	if !boolPayload.Found || boolPayload.Value != "true" {
-		t.Fatalf("expected feature.enabled bool value, got %#v", boolPayload)
+	if !boolPayload.Found || boolPayload.Value != `true` {
+		t.Fatalf("expected feature.enabled JSON bool value, got %#v", boolPayload)
 	}
 
 	intResponse := invokeConfigHostService(
 		t,
-		hcc,
-		pluginbridge.HostServiceMethodConfigInt,
+		configHostCallContext(),
+		protocol.HostServiceMethodConfigGet,
 		"feature.retries",
 	)
 	intPayload := decodeConfigResponse(t, intResponse)
-	if !intPayload.Found || intPayload.Value != "3" {
-		t.Fatalf("expected feature.retries int value, got %#v", intPayload)
+	if !intPayload.Found || intPayload.Value != `3` {
+		t.Fatalf("expected feature.retries JSON int value, got %#v", intPayload)
 	}
-
-	durationResponse := invokeConfigHostService(
-		t,
-		hcc,
-		pluginbridge.HostServiceMethodConfigDuration,
-		"monitor.interval",
-	)
-	durationPayload := decodeConfigResponse(t, durationResponse)
-	if !durationPayload.Found || durationPayload.Value != "45s" {
-		t.Fatalf("expected monitor.interval duration value, got %#v", durationPayload)
-	}
-
-	existsResponse := invokeConfigHostService(
-		t,
-		hcc,
-		pluginbridge.HostServiceMethodConfigExists,
-		"feature.retries",
-	)
-	existsPayload := decodeConfigResponse(t, existsResponse)
-	if !existsPayload.Found {
-		t.Fatalf("expected feature.retries exists response to be found, got %#v", existsPayload)
+	if configSvc.existsCalls != 3 || configSvc.getCalls != 3 {
+		t.Fatalf("expected exists/get per config read, got exists=%d get=%d", configSvc.existsCalls, configSvc.getCalls)
 	}
 }
 
-// TestHandleHostServiceInvokeConfigReadsFullSnapshot verifies empty key reads
-// the full GoFrame configuration snapshot.
-func TestHandleHostServiceInvokeConfigReadsFullSnapshot(t *testing.T) {
-	setWasmConfigAdapter(t, `
-custom:
-  name: demo
-`)
+// TestHandleHostServiceInvokeConfigRejectsRootRead verifies empty key cannot
+// read a full config snapshot.
+func TestHandleHostServiceInvokeConfigRejectsRootRead(t *testing.T) {
+	configureTrackingConfigFactory(t, &trackingConfigService{values: map[string]any{
+		"custom.name": "demo",
+	}})
 
 	response := invokeConfigHostService(
 		t,
 		configHostCallContext(),
-		pluginbridge.HostServiceMethodConfigGet,
+		protocol.HostServiceMethodConfigGet,
 		"",
 	)
-	payload := decodeConfigResponse(t, response)
-	if !payload.Found {
-		t.Fatal("expected full config snapshot to be found")
-	}
-	if !strings.Contains(payload.Value, `"custom"`) || !strings.Contains(payload.Value, `"demo"`) {
-		t.Fatalf("expected full config snapshot JSON to include custom value, got %s", payload.Value)
+	if response.Status != protocol.HostCallStatusInternalError {
+		t.Fatalf("expected root config read to be rejected, got status=%d payload=%s", response.Status, string(response.Payload))
 	}
 }
 
 // TestHandleHostServiceInvokeConfigMissingKey verifies missing keys return found=false.
 func TestHandleHostServiceInvokeConfigMissingKey(t *testing.T) {
-	setWasmConfigAdapter(t, `
-custom:
-  name: demo
-`)
+	configureTrackingConfigFactory(t, &trackingConfigService{values: map[string]any{
+		"custom.name": "demo",
+	}})
 
 	response := invokeConfigHostService(
 		t,
 		configHostCallContext(),
-		pluginbridge.HostServiceMethodConfigGet,
+		protocol.HostServiceMethodConfigGet,
 		"custom.missing",
 	)
 	payload := decodeConfigResponse(t, response)
@@ -182,13 +189,59 @@ custom:
 	}
 }
 
+// TestHandleHostServiceInvokeConfigBindsArtifactDefaultConfig verifies active
+// release default config is passed to the scoped factory for each execution.
+func TestHandleHostServiceInvokeConfigBindsArtifactDefaultConfig(t *testing.T) {
+	configSvc := &trackingConfigService{values: map[string]any{
+		"feature.name": "demo",
+	}}
+	factory := configureTrackingConfigFactory(t, configSvc)
+	hcc := configHostCallContext()
+	hcc.artifactDefaultConfig = []byte("feature:\n  name: artifact\n")
+
+	response := invokeConfigHostService(
+		t,
+		hcc,
+		protocol.HostServiceMethodConfigGet,
+		"feature.name",
+	)
+	payload := decodeConfigResponse(t, response)
+	if !payload.Found || payload.Value != `"demo"` {
+		t.Fatalf("expected config response, got %#v", payload)
+	}
+	if factory.lastArtifactPlugin != "test-plugin-config" || factory.lastArtifactContent != "feature:\n  name: artifact\n" {
+		t.Fatalf("expected artifact config binding, got plugin=%q content=%q", factory.lastArtifactPlugin, factory.lastArtifactContent)
+	}
+}
+
+// TestHandleHostServiceInvokeConfigRejectsTypedMethod verifies dynamic config
+// calls reject SDK helper names at authorization time.
+func TestHandleHostServiceInvokeConfigRejectsTypedMethod(t *testing.T) {
+	configureTrackingConfigFactory(t, &trackingConfigService{values: map[string]any{
+		"feature.name": "demo",
+	}})
+
+	response := invokeConfigHostService(
+		t,
+		configHostCallContext(),
+		protocol.HostServiceMethodConfigString,
+		"feature.name",
+	)
+	if response.Status != protocol.HostCallStatusNotFound {
+		t.Fatalf(
+			"expected typed config method to be rejected, got status=%d payload=%s",
+			response.Status,
+			string(response.Payload),
+		)
+	}
+}
+
 // TestHandleHostServiceInvokeConfigRejectsUnsupportedMethod verifies dynamic
-// config host service declarations and calls remain limited to read-only methods.
+// config host service declarations and calls remain limited to get.
 func TestHandleHostServiceInvokeConfigRejectsUnsupportedMethod(t *testing.T) {
-	setWasmConfigAdapter(t, `
-custom:
-  name: demo
-`)
+	configureTrackingConfigFactory(t, &trackingConfigService{values: map[string]any{
+		"custom.name": "demo",
+	}})
 
 	response := invokeConfigHostService(
 		t,
@@ -196,7 +249,7 @@ custom:
 		"set",
 		"custom.name",
 	)
-	if response.Status != pluginbridge.HostCallStatusNotFound {
+	if response.Status != protocol.HostCallStatusNotFound {
 		t.Fatalf(
 			"expected unsupported config method to be rejected, got status=%d payload=%s",
 			response.Status,
@@ -205,38 +258,11 @@ custom:
 	}
 }
 
-// TestHandleHostServiceInvokeConfigUsesConfiguredSharedService verifies config
-// host service dispatch reuses the explicitly configured shared adapter.
-func TestHandleHostServiceInvokeConfigUsesConfiguredSharedService(t *testing.T) {
-	configSvc := &trackingConfigService{}
-	previousConfigSvc := configHostService
-	if err := ConfigureConfigHostService(configSvc); err != nil {
-		t.Fatalf("configure config host service failed: %v", err)
-	}
-	t.Cleanup(func() {
-		configHostService = previousConfigSvc
-	})
-
-	response := invokeConfigHostService(
-		t,
-		configHostCallContext(),
-		pluginbridge.HostServiceMethodConfigString,
-		"feature.name",
-	)
-	payload := decodeConfigResponse(t, response)
-	if !payload.Found || payload.Value != "shared-string" {
-		t.Fatalf("expected shared config string value, got %#v", payload)
-	}
-	if configSvc.existsCalls != 1 || configSvc.stringCalls != 1 || configSvc.lastKey != "feature.name" {
-		t.Fatalf("expected shared config adapter calls, got exists=%d string=%d key=%q", configSvc.existsCalls, configSvc.stringCalls, configSvc.lastKey)
-	}
-}
-
 // TestConfigureConfigHostServiceRejectsNil verifies missing runtime config
-// adapter injection returns an error instead of silently constructing an isolated adapter.
+// factory injection returns an error instead of silently constructing an isolated adapter.
 func TestConfigureConfigHostServiceRejectsNil(t *testing.T) {
 	if err := ConfigureConfigHostService(nil); err == nil {
-		t.Fatal("expected nil config host service to return an error")
+		t.Fatal("expected nil config host service factory to return an error")
 	}
 }
 
@@ -245,11 +271,11 @@ func configHostCallContext() *hostCallContext {
 	return &hostCallContext{
 		pluginID: "test-plugin-config",
 		capabilities: map[string]struct{}{
-			pluginbridge.CapabilityConfig: {},
+			protocol.CapabilityConfig: {},
 		},
-		hostServices: []*pluginbridge.HostServiceSpec{
+		hostServices: []*protocol.HostServiceSpec{
 			{
-				Service: pluginbridge.HostServiceConfig,
+				Service: protocol.HostServiceConfig,
 			},
 		},
 	}
@@ -261,49 +287,47 @@ func invokeConfigHostService(
 	hcc *hostCallContext,
 	method string,
 	key string,
-) *pluginbridge.HostCallResponseEnvelope {
+) *protocol.HostCallResponseEnvelope {
 	t.Helper()
 
-	request := &pluginbridge.HostServiceRequestEnvelope{
-		Service: pluginbridge.HostServiceConfig,
+	request := &protocol.HostServiceRequestEnvelope{
+		Service: protocol.HostServiceConfig,
 		Method:  method,
-		Payload: pluginbridge.MarshalHostServiceConfigKeyRequest(&pluginbridge.HostServiceConfigKeyRequest{
+		Payload: protocol.MarshalHostServiceConfigKeyRequest(&protocol.HostServiceConfigKeyRequest{
 			Key: key,
 		}),
 	}
-	return handleHostServiceInvoke(context.Background(), hcc, pluginbridge.MarshalHostServiceRequestEnvelope(request))
+	return handleHostServiceInvoke(context.Background(), hcc, protocol.MarshalHostServiceRequestEnvelope(request))
 }
 
 // decodeConfigResponse verifies success and decodes one config host service response.
 func decodeConfigResponse(
 	t *testing.T,
-	response *pluginbridge.HostCallResponseEnvelope,
-) *pluginbridge.HostServiceConfigValueResponse {
+	response *protocol.HostCallResponseEnvelope,
+) *protocol.HostServiceConfigValueResponse {
 	t.Helper()
 
-	if response.Status != pluginbridge.HostCallStatusSuccess {
+	if response.Status != protocol.HostCallStatusSuccess {
 		t.Fatalf("expected config host service success, got status=%d payload=%s", response.Status, string(response.Payload))
 	}
-	payload, err := pluginbridge.UnmarshalHostServiceConfigValueResponse(response.Payload)
+	payload, err := protocol.UnmarshalHostServiceConfigValueResponse(response.Payload)
 	if err != nil {
 		t.Fatalf("expected config response decode to succeed, got error: %v", err)
 	}
 	return payload
 }
 
-// setWasmConfigAdapter swaps the process config adapter for one test case.
-func setWasmConfigAdapter(t *testing.T, content string) {
+// configureTrackingConfigFactory swaps the process config factory for one test case.
+func configureTrackingConfigFactory(t *testing.T, service *trackingConfigService) *trackingConfigFactory {
 	t.Helper()
 
-	adapter, err := gcfg.NewAdapterContent(content)
-	if err != nil {
-		t.Fatalf("create content adapter: %v", err)
+	factory := &trackingConfigFactory{service: service}
+	previousFactory := configHostServiceFactory
+	if err := ConfigureConfigHostService(factory); err != nil {
+		t.Fatalf("configure config host service failed: %v", err)
 	}
-
-	originalAdapter := g.Cfg().GetAdapter()
-	g.Cfg().SetAdapter(adapter)
-
 	t.Cleanup(func() {
-		g.Cfg().SetAdapter(originalAdapter)
+		configHostServiceFactory = previousFactory
 	})
+	return factory
 }

@@ -19,7 +19,7 @@ import (
 	"lina-core/internal/service/plugin/internal/catalog"
 	"lina-core/internal/service/plugin/internal/testutil"
 	"lina-core/pkg/bizerr"
-	"lina-core/pkg/pluginbridge"
+	"lina-core/pkg/plugin/pluginbridge/protocol"
 )
 
 // TestSyncAndListRetainsMissingRuntimeRegistryAndReconcilesState verifies that
@@ -363,12 +363,12 @@ func TestPreviewRuntimeUpgradeReturnsPendingDynamicPlan(t *testing.T) {
 			Type:    catalog.TypeDynamic.String(),
 		},
 		&catalog.ArtifactSpec{
-			RuntimeKind: pluginbridge.RuntimeKindWasm,
-			ABIVersion:  pluginbridge.SupportedABIVersion,
-			HostServices: []*pluginbridge.HostServiceSpec{
+			RuntimeKind: protocol.RuntimeKindWasm,
+			ABIVersion:  protocol.SupportedABIVersion,
+			HostServices: []*protocol.HostServiceSpec{
 				{
-					Service: pluginbridge.HostServiceStorage,
-					Methods: []string{pluginbridge.HostServiceMethodStorageGet},
+					Service: protocol.HostServiceStorage,
+					Methods: []string{protocol.HostServiceMethodStorageGet},
 					Paths:   []string{"reports/"},
 				},
 			},
@@ -402,14 +402,14 @@ func TestPreviewRuntimeUpgradeReturnsPendingDynamicPlan(t *testing.T) {
 			Type:    catalog.TypeDynamic.String(),
 		},
 		&catalog.ArtifactSpec{
-			RuntimeKind: pluginbridge.RuntimeKindWasm,
-			ABIVersion:  pluginbridge.SupportedABIVersion,
-			HostServices: []*pluginbridge.HostServiceSpec{
+			RuntimeKind: protocol.RuntimeKindWasm,
+			ABIVersion:  protocol.SupportedABIVersion,
+			HostServices: []*protocol.HostServiceSpec{
 				{
-					Service: pluginbridge.HostServiceStorage,
+					Service: protocol.HostServiceStorage,
 					Methods: []string{
-						pluginbridge.HostServiceMethodStorageGet,
-						pluginbridge.HostServiceMethodStoragePut,
+						protocol.HostServiceMethodStorageGet,
+						protocol.HostServiceMethodStoragePut,
 					},
 					Paths: []string{"reports/", "exports/"},
 				},
@@ -461,7 +461,7 @@ func TestPreviewRuntimeUpgradeReturnsPendingDynamicPlan(t *testing.T) {
 		t.Fatalf("expected one changed host service, got %#v", preview.HostServicesDiff)
 	}
 	change := preview.HostServicesDiff.Changed[0]
-	if change.Service != pluginbridge.HostServiceStorage {
+	if change.Service != protocol.HostServiceStorage {
 		t.Fatalf("expected storage host service change, got %#v", change)
 	}
 	if len(change.FromPaths) != 1 || change.FromPaths[0] != "reports/" {
@@ -696,6 +696,53 @@ func TestFilterMenusHidesPendingUpgradePluginMenus(t *testing.T) {
 	}
 }
 
+// TestFilterMenusUsesAuthoritativeRegistryState verifies user-facing menu
+// projection does not reuse stale process-local enablement snapshots after
+// direct lifecycle-state changes have reached the persisted registry.
+func TestFilterMenusUsesAuthoritativeRegistryState(t *testing.T) {
+	var (
+		service  = newTestService()
+		ctx      = context.Background()
+		pluginID = "plugin-dev-source-menu-authoritative"
+	)
+
+	testutil.CreateTestPluginDir(t, pluginID)
+	testutil.CleanupPluginGovernanceRowsHard(t, ctx, pluginID)
+	t.Cleanup(func() {
+		testutil.CleanupPluginGovernanceRowsHard(t, ctx, pluginID)
+	})
+
+	if _, err := service.SyncAndList(ctx); err != nil {
+		t.Fatalf("expected source plugin discovery to succeed, got error: %v", err)
+	}
+	if _, err := service.Install(ctx, pluginID, InstallOptions{}); err != nil {
+		t.Fatalf("expected source plugin install to succeed, got error: %v", err)
+	}
+	service.integrationSvc.SetPluginEnabledState(pluginID, false)
+	if err := service.catalogSvc.SetPluginStatus(ctx, pluginID, catalog.StatusEnabled); err != nil {
+		t.Fatalf("expected persisted plugin status update to succeed, got error: %v", err)
+	}
+
+	menus := []*entity.SysMenu{
+		{
+			Id:      1,
+			MenuKey: "plugin:" + pluginID + ":entry",
+			Name:    "source menu",
+			Type:    catalog.MenuTypePage.String(),
+			Status:  1,
+			Visible: 1,
+		},
+	}
+	filtered := service.FilterMenus(ctx, menus)
+	if len(filtered) != 1 {
+		t.Fatalf("expected enabled source plugin menu to stay visible, got %d entries", len(filtered))
+	}
+	filteredPermissions := service.FilterPermissionMenus(ctx, menus)
+	if len(filteredPermissions) != 1 {
+		t.Fatalf("expected enabled source plugin permission menu to stay visible, got %d entries", len(filteredPermissions))
+	}
+}
+
 // TestListLocalizesUninstalledDynamicPluginMetadataInEnglish verifies that
 // plugin management can display artifact-owned metadata before installation.
 func TestListLocalizesUninstalledDynamicPluginMetadataInEnglish(t *testing.T) {
@@ -725,8 +772,8 @@ func TestListLocalizesUninstalledDynamicPluginMetadataInEnglish(t *testing.T) {
 			Description: "未安装动态插件的中文描述",
 		},
 		&catalog.ArtifactSpec{
-			RuntimeKind:        pluginbridge.RuntimeKindWasm,
-			ABIVersion:         pluginbridge.SupportedABIVersion,
+			RuntimeKind:        protocol.RuntimeKindWasm,
+			ABIVersion:         protocol.SupportedABIVersion,
 			FrontendAssetCount: len(testutil.DefaultTestRuntimeFrontendAssets()),
 		},
 		testutil.DefaultTestRuntimeFrontendAssets(),
@@ -925,7 +972,7 @@ func appendRuntimeI18NSectionForPluginListTest(
 	}
 	content = appendPluginListTestWasmCustomSection(
 		content,
-		pluginbridge.WasmSectionI18NAssets,
+		protocol.WasmSectionI18NAssets,
 		sectionPayload,
 	)
 	if err = os.WriteFile(artifactPath, content, 0o644); err != nil {

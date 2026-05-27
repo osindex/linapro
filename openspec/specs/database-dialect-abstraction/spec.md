@@ -50,7 +50,7 @@
 
 #### Scenario: 驱动与 ORM 只读 SQL 分类由 dialect 公共包提供
 
-- **当** `plugindb/host` 等治理层需要允许驱动或 ORM 发出的表元数据读、schema probe、版本 probe 等无业务表只读 SQL 时
+- **当** `plugindb` 宿主治理层需要允许驱动或 ORM 发出的表元数据读、schema probe、版本 probe 等无业务表只读 SQL 时
 - **则** 调用方通过 `Dialect.ClassifyReadSQL(sql)` 或等价公共门面获取语义分类
 - **且** 治理层不得直接硬编码 `information_schema`、`pg_catalog`、`pg_class`、`current_schema()`、`version()` 等 PostgreSQL 特有 SQL 片段
 - **且** PostgreSQL 具体识别逻辑必须维护在 `pkg/dialect/internal/postgres` 内部子包中
@@ -178,4 +178,3 @@
 - **当** 调用方传入的 `tableNames` 中部分表名在数据库中不存在
 - **则** 返回的 `[]TableMeta` 仅包含实际存在的表
 - **且** 不为不存在的表名返回任何记录或错误
-

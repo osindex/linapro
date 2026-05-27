@@ -79,6 +79,17 @@ make wasm p=linapro-demo-dynamic
 
 Use `plugin_dir=<path>` when a test or local fixture needs to package a dynamic plugin outside `apps/lina-plugins`.
 
+## GoFrame Code Generation
+
+`linactl ctrl` and `linactl dao` run the GoFrame CLI module embedded in `linactl`; developers no longer need to install `gf` or keep a `gf` executable on `PATH`.
+
+```bash
+go run . ctrl
+go run . dao
+```
+
+The generated code still uses the `apps/lina-core` GoFrame project layout and reads `apps/lina-core/hack/config.yaml`. `dao` generation still requires the configured database to be reachable and initialized, so run the repository initialization flow or provide an equivalent database before using it.
+
 ## Runtime I18n Checks
 
 `linactl i18n.check` owns the runtime `i18n` governance checks. It scans high-risk runtime-visible hard-coded copy and validates host/plugin runtime message key coverage:

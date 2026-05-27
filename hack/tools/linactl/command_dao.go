@@ -8,9 +8,8 @@ import (
 	"linactl/internal/goframecli"
 )
 
-// runDao runs gf gen dao in the core application directory.
-func runDao(ctx context.Context, a *app, input commandInput) error {
-	return goframecli.Run(ctx, a.root, a.runCommand, func(installCtx context.Context) error {
-		return runCLIInstallIfMissing(installCtx, a, input)
-	}, "gen", "dao")
+// runDao runs the embedded GoFrame gen dao command in the core application
+// directory without requiring an external gf binary.
+func runDao(ctx context.Context, a *app, _ commandInput) error {
+	return goframecli.Run(ctx, a.root, a.executable, a.runCommand, "gen", "dao")
 }

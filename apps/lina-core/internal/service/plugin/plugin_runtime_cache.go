@@ -20,6 +20,10 @@ var pluginRuntimeCacheObservedRevision = pluginruntimecache.NewObservedRevision(
 // pluginI18nService defines the i18n methods needed by plugin lifecycle,
 // runtime cache refresh, and source-plugin reason rendering paths.
 type pluginI18nService interface {
+	// GetLocale returns the effective request locale stored in business context.
+	GetLocale(ctx context.Context) string
+	// BundleVersion returns the per-locale runtime translation bundle version.
+	BundleVersion(locale string) uint64
 	// InvalidateRuntimeBundleCache clears cached runtime bundles for one explicit scope.
 	InvalidateRuntimeBundleCache(scope i18nsvc.InvalidateScope)
 	// Translate renders one runtime i18n key in the current request locale.
@@ -34,6 +38,7 @@ func newRuntimeCacheRevisionController(
 	integrationSvc pluginRuntimeIntegrationRefresher,
 	frontendSvc pluginRuntimeFrontendInvalidator,
 	i18nSvc pluginI18nService,
+	managementListInvalidator pluginManagementListInvalidator,
 ) *pluginruntimecache.Controller {
 	clusterEnabled := false
 	if topology != nil {
@@ -43,7 +48,7 @@ func newRuntimeCacheRevisionController(
 		clusterEnabled,
 		cacheCoordSvc,
 		pluginRuntimeCacheObservedRevision,
-		func(ctx context.Context) error {
+		func(ctx context.Context, revision int64) error {
 			if integrationSvc != nil {
 				if err := integrationSvc.RefreshEnabledSnapshot(ctx); err != nil {
 					return err
@@ -51,6 +56,9 @@ func newRuntimeCacheRevisionController(
 			}
 			if frontendSvc != nil {
 				frontendSvc.InvalidateAllBundles(ctx, "cluster_runtime_revision_changed")
+			}
+			if managementListInvalidator != nil {
+				managementListInvalidator.InvalidateManagementListCache(ctx, "cluster_runtime_revision_changed")
 			}
 			wasm.InvalidateAllCache(ctx)
 			if i18nSvc != nil {
@@ -78,6 +86,12 @@ type pluginRuntimeFrontendInvalidator interface {
 	InvalidateAllBundles(ctx context.Context, reason string)
 }
 
+// pluginManagementListInvalidator narrows the root read-model invalidation callback.
+type pluginManagementListInvalidator interface {
+	// InvalidateManagementListCache clears the plugin management read model.
+	InvalidateManagementListCache(ctx context.Context, reason string)
+}
+
 // ensureRuntimeCacheFresh synchronizes plugin runtime caches with the shared
 // cluster revision before read paths consume process-local snapshots.
 func (s *serviceImpl) ensureRuntimeCacheFresh(ctx context.Context) error {
@@ -98,23 +112,25 @@ func (s *serviceImpl) ensureRuntimeCacheFreshBestEffort(ctx context.Context, ope
 // MarkRuntimeCacheChanged publishes one successful runtime cache mutation to
 // other cluster nodes. It implements the dynamic runtime cache-change notifier.
 func (s *serviceImpl) MarkRuntimeCacheChanged(ctx context.Context, reason string) error {
-	return s.markRuntimeCacheChanged(ctx, reason)
+	_, err := s.markRuntimeCacheChanged(ctx, reason)
+	return err
 }
 
 // markRuntimeCacheChanged bumps the shared plugin runtime cache revision in
 // cluster mode and is a no-op in single-node deployments.
-func (s *serviceImpl) markRuntimeCacheChanged(ctx context.Context, reason string) error {
+func (s *serviceImpl) markRuntimeCacheChanged(ctx context.Context, reason string) (int64, error) {
 	if s == nil || s.runtimeCacheRevisionCtrl == nil {
-		return nil
+		return 0, nil
 	}
+	s.InvalidateManagementListCache(ctx, reason)
 	revision, err := s.runtimeCacheRevisionCtrl.MarkChanged(ctx)
 	if err != nil {
-		return err
+		return 0, err
 	}
 	if revision > 0 {
 		logger.Debugf(ctx, "plugin runtime cache revision bumped reason=%s revision=%d", reason, revision)
 	}
-	return nil
+	return revision, nil
 }
 
 // invalidateRuntimeUpgradeCaches clears this node's plugin-scoped derived

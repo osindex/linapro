@@ -11,7 +11,9 @@ import (
 	"path/filepath"
 	"reflect"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 	"unicode"
 
 	"github.com/gogf/gf/v2/errors/gerror"
@@ -255,6 +257,106 @@ func TestLogHTTPStartupSummaryEmitsFieldsWithoutSQL(t *testing.T) {
 	}
 }
 
+// TestStartHTTPPluginManagementListPrewarmLogsDebugDuration verifies startup
+// prewarming records elapsed time on the debug path for both outcomes.
+func TestStartHTTPPluginManagementListPrewarmLogsDebugDuration(t *testing.T) {
+	capture := newLogCapture(t)
+
+	testCases := []struct {
+		name   string
+		err    error
+		status string
+	}{
+		{
+			name:   "success",
+			status: "succeeded",
+		},
+		{
+			name:   "failure",
+			err:    gerror.New("prewarm failed"),
+			status: "failed",
+		},
+	}
+
+	for _, testCase := range testCases {
+		capture.Reset()
+
+		startHTTPPluginManagementListPrewarm(
+			context.Background(),
+			&prewarmLoggingPluginService{managementListErr: testCase.err},
+		)
+
+		joined := capture.WaitFor(
+			t,
+			"prewarm plugin management list finished status="+testCase.status,
+		)
+		if !strings.Contains(joined, "duration=") {
+			t.Fatalf("expected prewarm debug log to include duration, got %q", joined)
+		}
+	}
+}
+
+// TestPrewarmHTTPRuntimeFrontendBundlesLogsDebugDuration verifies synchronous
+// startup frontend prewarming records elapsed time on the debug path.
+func TestPrewarmHTTPRuntimeFrontendBundlesLogsDebugDuration(t *testing.T) {
+	capture := newLogCapture(t)
+	testCases := []struct {
+		name   string
+		err    error
+		status string
+	}{
+		{
+			name:   "success",
+			status: "succeeded",
+		},
+		{
+			name:   "failure",
+			err:    gerror.New("prewarm failed"),
+			status: "failed",
+		},
+	}
+
+	for _, testCase := range testCases {
+		capture.Reset()
+
+		prewarmHTTPRuntimeFrontendBundles(
+			context.Background(),
+			&prewarmLoggingPluginService{frontendBundlesErr: testCase.err},
+		)
+
+		joined := capture.Joined()
+		expected := "prewarm runtime frontend bundles finished status=" + testCase.status
+		if !strings.Contains(joined, expected) {
+			t.Fatalf("expected captured log to contain %q, got %q", expected, joined)
+		}
+		if !strings.Contains(joined, "duration=") {
+			t.Fatalf("expected prewarm debug log to include duration, got %q", joined)
+		}
+	}
+}
+
+// newLogCapture configures the project logger for one test and captures log
+// content while restoring global logger state during cleanup.
+func newLogCapture(t *testing.T) *logCapture {
+	t.Helper()
+
+	projectLogger := logger.Logger()
+	previousLevel := projectLogger.GetLevel()
+	projectLogger.SetLevel(glog.LEVEL_ALL)
+
+	capture := &logCapture{}
+	projectLogger.SetHandlers(func(ctx context.Context, in *glog.HandlerInput) {
+		capture.logsMu.Lock()
+		defer capture.logsMu.Unlock()
+		capture.logs = append(capture.logs, in.ValuesContent())
+	})
+	t.Cleanup(func() {
+		projectLogger.SetHandlers()
+		projectLogger.SetLevel(previousLevel)
+	})
+	return capture
+}
+
 // TestValidateHTTPStartupPluginConsistencyPanicsOnInvalidState verifies
 // startup consistency failures stop HTTP startup before later phases run.
 func TestValidateHTTPStartupPluginConsistencyPanicsOnInvalidState(t *testing.T) {
@@ -319,6 +421,60 @@ type startupConsistencyFailingPluginService struct {
 func (s *startupConsistencyFailingPluginService) ValidateStartupConsistency(context.Context) error {
 	s.called = true
 	return s.err
+}
+
+// prewarmLoggingPluginService is a narrow fake for startup prewarm logging tests.
+type prewarmLoggingPluginService struct {
+	managementListErr  error
+	frontendBundlesErr error
+}
+
+// PrewarmManagementList returns the configured result for startup logging tests.
+func (s *prewarmLoggingPluginService) PrewarmManagementList(context.Context) error {
+	return s.managementListErr
+}
+
+// PrewarmRuntimeFrontendBundles returns the configured result for logging tests.
+func (s *prewarmLoggingPluginService) PrewarmRuntimeFrontendBundles(context.Context) error {
+	return s.frontendBundlesErr
+}
+
+// logCapture stores project logger output for one test.
+type logCapture struct {
+	logs   []string
+	logsMu sync.Mutex
+}
+
+// Reset clears previously captured log output.
+func (c *logCapture) Reset() {
+	c.logsMu.Lock()
+	defer c.logsMu.Unlock()
+	c.logs = nil
+}
+
+// Joined returns all currently captured log output.
+func (c *logCapture) Joined() string {
+	c.logsMu.Lock()
+	defer c.logsMu.Unlock()
+	return strings.Join(c.logs, "\n")
+}
+
+// WaitFor waits until the asynchronous startup prewarm goroutine emits one
+// expected log line, then returns all captured log content.
+func (c *logCapture) WaitFor(t *testing.T, substring string) string {
+	t.Helper()
+
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		joined := c.Joined()
+		if strings.Contains(joined, substring) {
+			return joined
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("expected captured log to contain %q, got %q", substring, joined)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
 }
 
 // TestExecuteSQLAssetsWithExecutorStopsAfterFirstError verifies execution halts

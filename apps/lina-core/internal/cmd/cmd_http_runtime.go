@@ -30,7 +30,6 @@ import (
 	"lina-core/internal/service/menu"
 	"lina-core/internal/service/middleware"
 	"lina-core/internal/service/notify"
-	"lina-core/internal/service/orgcap"
 	pluginsvc "lina-core/internal/service/plugin"
 	"lina-core/internal/service/pluginhostservices"
 	"lina-core/internal/service/role"
@@ -38,12 +37,16 @@ import (
 	"lina-core/internal/service/startupstats"
 	"lina-core/internal/service/sysconfig"
 	sysinfosvc "lina-core/internal/service/sysinfo"
-	tenantcapsvc "lina-core/internal/service/tenantcap"
 	"lina-core/internal/service/user"
 	"lina-core/internal/service/usermsg"
 	"lina-core/pkg/dialect"
 	"lina-core/pkg/logger"
-	"lina-core/pkg/pluginhost"
+	"lina-core/pkg/plugin/capability"
+	pluginserviceconfig "lina-core/pkg/plugin/capability/config"
+	pluginservicehostconfig "lina-core/pkg/plugin/capability/hostconfig"
+	pluginservicemanifest "lina-core/pkg/plugin/capability/manifest"
+	"lina-core/pkg/plugin/capability/orgcap"
+	tenantcapsvc "lina-core/pkg/plugin/capability/tenantcap"
 )
 
 // httpRuntime groups long-lived services that must be shared across HTTP
@@ -55,23 +58,24 @@ type httpRuntime struct {
 	pluginSvc       pluginsvc.Service    // pluginSvc owns plugin lifecycle, runtime assets, routes, and hooks.
 	authSvc         auth.Service         // authSvc owns JWT, session, and token-state flows.
 	authTokenIssuer auth.TenantTokenIssuer
-	bizCtxSvc       bizctx.Service          // bizCtxSvc owns request-scoped business context mutation.
-	i18nSvc         i18nsvc.Service         // i18nSvc owns runtime language bundles and localization.
-	orgCapSvc       orgcap.Service          // orgCapSvc exposes optional organization capability.
-	roleSvc         role.Service            // roleSvc owns permission and access snapshot state.
-	sessionStore    session.Store           // sessionStore owns online-session persistence and hot state.
-	tenantSvc       tenantcapsvc.Service    // tenantSvc exposes optional linapro-tenant-core capability.
-	kvCacheSvc      kvcache.Service         // kvCacheSvc owns runtime-selected KV backend.
-	hostServices    pluginhost.HostServices // hostServices publishes runtime-owned adapters to source plugins.
-	dictSvc         dict.Service            // dictSvc owns dictionary lookup and maintenance.
-	fileSvc         file.Service            // fileSvc owns file metadata and storage operations.
-	menuSvc         menu.Service            // menuSvc owns menu tree and permission menu lookup.
-	notifySvc       notify.Service          // notifySvc owns unified notification delivery.
-	sysConfigSvc    sysconfig.Service       // sysConfigSvc owns mutable runtime configuration records.
-	sysInfoSvc      sysinfosvc.Service      // sysInfoSvc owns runtime diagnostics projection.
-	userSvc         user.Service            // userSvc owns host user management operations.
-	userMsgSvc      usermsg.Service         // userMsgSvc owns current-user inbox operations.
-	apiDocSvc       apidoc.Service          // apiDocSvc builds the host-managed OpenAPI document.
+	bizCtxSvc       bizctx.Service              // bizCtxSvc owns request-scoped business context mutation.
+	i18nSvc         i18nsvc.Service             // i18nSvc owns runtime language bundles and localization.
+	orgCapSvc       orgcap.Service              // orgCapSvc exposes optional organization capability.
+	orgProjection   orgcap.ProjectionService    // orgProjection exposes host user-management organization projections.
+	roleSvc         role.Service                // roleSvc owns permission and access snapshot state.
+	sessionStore    session.Store               // sessionStore owns online-session persistence and hot state.
+	tenantSvc       tenantcapsvc.RuntimeService // tenantSvc exposes optional linapro-tenant-core capability.
+	kvCacheSvc      kvcache.Service             // kvCacheSvc owns runtime-selected KV backend.
+	capabilities    capability.Services         // capabilities publishes runtime-owned adapters to plugins.
+	dictSvc         dict.Service                // dictSvc owns dictionary lookup and maintenance.
+	fileSvc         file.Service                // fileSvc owns file metadata and storage operations.
+	menuSvc         menu.Service                // menuSvc owns menu tree and permission menu lookup.
+	notifySvc       notify.Service              // notifySvc owns unified notification delivery.
+	sysConfigSvc    sysconfig.Service           // sysConfigSvc owns mutable runtime configuration records.
+	sysInfoSvc      sysinfosvc.Service          // sysInfoSvc owns runtime diagnostics projection.
+	userSvc         user.Service                // userSvc owns host user management operations.
+	userMsgSvc      usermsg.Service             // userMsgSvc owns current-user inbox operations.
+	apiDocSvc       apidoc.Service              // apiDocSvc builds the host-managed OpenAPI document.
 	jobRegistry     jobhandlersvc.Registry
 	jobMgmtSvc      jobmgmtsvc.Service
 	middlewareSvc   middleware.Service
@@ -91,6 +95,13 @@ type pluginStartupConsistencyValidator interface {
 type pluginStartupTenantProvisioner interface {
 	// ReconcileAutoEnabledTenantPlugins provisions startup auto-enabled tenant plugins.
 	ReconcileAutoEnabledTenantPlugins(ctx context.Context) error
+}
+
+// pluginManagementListPrewarmer is the startup-only contract for warming the
+// plugin management read model after runtime plugin state has converged.
+type pluginManagementListPrewarmer interface {
+	// PrewarmManagementList builds the complete plugin management list read model and returns build errors to the caller.
+	PrewarmManagementList(ctx context.Context) error
 }
 
 // newHTTPStartupContext creates the context shared by one HTTP startup
@@ -194,23 +205,24 @@ func newHTTPRuntime(ctx context.Context, configSvc config.Service) (*httpRuntime
 		return nil, err
 	}
 	var (
-		orgCapSvc    = orgcap.New(pluginSvc)
-		tenantSvc    = tenantcapsvc.New(pluginSvc, bizCtxSvc)
-		kvCacheSvc   = kvcache.New()
-		roleSvc      = role.New(pluginSvc, bizCtxSvc, configSvc, i18nSvc, nil, orgCapSvc, tenantSvc)
-		scopeSvc     = datascope.New(bizCtxSvc, roleSvc, orgCapSvc)
-		dictSvc      = dict.New(i18nSvc)
-		menuSvc      = menu.New(pluginSvc, i18nSvc, roleSvc, tenantSvc)
-		notifySvc    = notify.New(tenantSvc)
-		authSvc      = auth.New(configSvc, pluginSvc, orgCapSvc, roleSvc, tenantSvc, sessionStore, kvCacheSvc)
-		fileStorage  = file.NewLocalStorage(configSvc.GetUploadPath(ctx))
-		fileSvc      = file.New(configSvc, fileStorage, bizCtxSvc, dictSvc, scopeSvc)
-		sysConfigSvc = sysconfig.New(configSvc, i18nSvc)
-		userSvc      = user.New(authSvc, bizCtxSvc, i18nSvc, orgCapSvc, roleSvc, scopeSvc, tenantSvc)
-		userMsgSvc   = usermsg.New(bizCtxSvc, notifySvc, i18nSvc)
-		apiDocSvc    = apidoc.New(configSvc, bizCtxSvc, i18nSvc, pluginSvc)
-		authTokenSvc = authSvc.(auth.TenantTokenIssuer)
-		jobRegistry  = jobhandlersvc.New()
+		orgCapSvc     = orgcap.New(pluginSvc)
+		orgProjection = orgCapSvc
+		tenantSvc     = tenantcapsvc.New(pluginSvc, bizCtxSvc)
+		kvCacheSvc    = kvcache.New()
+		roleSvc       = role.New(pluginSvc, bizCtxSvc, configSvc, i18nSvc, nil, tenantSvc)
+		scopeSvc      = datascope.New(bizCtxSvc, roleSvc, orgCapSvc)
+		dictSvc       = dict.New(i18nSvc)
+		menuSvc       = menu.New(pluginSvc, i18nSvc, roleSvc, tenantSvc)
+		notifySvc     = notify.New(tenantSvc)
+		authSvc       = auth.New(configSvc, pluginSvc, orgCapSvc, roleSvc, tenantSvc, sessionStore, kvCacheSvc)
+		fileStorage   = file.NewLocalStorage(configSvc.GetUploadPath(ctx))
+		fileSvc       = file.New(configSvc, fileStorage, bizCtxSvc, dictSvc, scopeSvc)
+		sysConfigSvc  = sysconfig.New(configSvc, i18nSvc)
+		userSvc       = user.New(authSvc, bizCtxSvc, i18nSvc, orgCapSvc, orgCapSvc, orgCapSvc, roleSvc, scopeSvc, tenantSvc, tenantSvc, tenantSvc)
+		userMsgSvc    = usermsg.New(bizCtxSvc, notifySvc, i18nSvc)
+		apiDocSvc     = apidoc.New(configSvc, bizCtxSvc, i18nSvc, pluginSvc)
+		authTokenSvc  = authSvc.(auth.TenantTokenIssuer)
+		jobRegistry   = jobhandlersvc.New()
 	)
 	sysInfoSvc, err := sysinfosvc.New(configSvc, clusterSvc, coordinationSvc, cacheCoordSvc)
 	if err != nil {
@@ -226,16 +238,18 @@ func newHTTPRuntime(ctx context.Context, configSvc config.Service) (*httpRuntime
 		jobMgmtSvc    = jobmgmtsvc.New(bizCtxSvc, configSvc, i18nSvc, jobRegistry, jobScheduler, scopeSvc)
 		middlewareSvc = middleware.New(authSvc, bizCtxSvc, configSvc, i18nSvc, pluginSvc, roleSvc, tenantSvc)
 	)
-	hostServices, err := pluginhostservices.New(
+	capabilities, err := pluginhostservices.New(
 		apiDocSvc,
 		authSvc,
 		authTokenSvc,
 		bizCtxSvc,
+		configSvc,
 		scopeSvc,
 		i18nSvc,
 		pluginSvc,
 		pluginSvc,
 		sessionStore,
+		orgCapSvc,
 		tenantSvc,
 		notifySvc,
 		kvCacheSvc,
@@ -245,8 +259,11 @@ func newHTTPRuntime(ctx context.Context, configSvc config.Service) (*httpRuntime
 		return nil, err
 	}
 	roleSvc.SetDataScopeService(scopeSvc)
-	pluginSvc.SetHostServices(hostServices)
-	pluginSvc.SetTenantCapability(tenantSvc)
+	pluginSvc.SetCapabilities(capabilities)
+	pluginSvc.SetOrganizationCapability(orgCapSvc)
+	pluginSvc.SetTenantStartupCapability(tenantSvc)
+	pluginSvc.SetTenantProvisioningCapability(tenantSvc)
+	pluginSvc.SetTenantPlatformGovernanceCapability(tenantSvc)
 	hostLockSvc, err := hostlock.New(locker.New())
 	if err != nil {
 		closeHTTPCoordinationAfterInitError(ctx, coordinationSvc)
@@ -257,7 +274,10 @@ func newHTTPRuntime(ctx context.Context, configSvc config.Service) (*httpRuntime
 		hostLockSvc,
 		notifySvc,
 		configSvc,
-		hostServices.Config(),
+		capabilities,
+		pluginserviceconfig.NewFactory("", ""),
+		pluginservicehostconfig.New(configSvc),
+		pluginservicemanifest.NewFactory(""),
 	); err != nil {
 		closeHTTPCoordinationAfterInitError(ctx, coordinationSvc)
 		return nil, err
@@ -290,11 +310,12 @@ func newHTTPRuntime(ctx context.Context, configSvc config.Service) (*httpRuntime
 		bizCtxSvc:       bizCtxSvc,
 		i18nSvc:         i18nSvc,
 		orgCapSvc:       orgCapSvc,
+		orgProjection:   orgProjection,
 		roleSvc:         roleSvc,
 		sessionStore:    sessionStore,
 		tenantSvc:       tenantSvc,
 		kvCacheSvc:      kvCacheSvc,
-		hostServices:    hostServices,
+		capabilities:    capabilities,
 		dictSvc:         dictSvc,
 		fileSvc:         fileSvc,
 		menuSvc:         menuSvc,
@@ -429,6 +450,7 @@ func finishHTTPRuntimeAfterSourceRoutes(ctx context.Context, runtime *httpRuntim
 	}); err != nil {
 		return err
 	}
+	startHTTPPluginManagementListPrewarm(ctx, runtime.pluginSvc)
 	return nil
 }
 
@@ -456,6 +478,32 @@ func validateHTTPStartupPluginConsistency(ctx context.Context, pluginSvc pluginS
 		logger.Panicf(ctx, "plugin startup consistency validation failed: %v", err)
 	}
 	return err
+}
+
+// startHTTPPluginManagementListPrewarm warms the plugin management read model
+// after startup convergence without delaying HTTP availability.
+func startHTTPPluginManagementListPrewarm(ctx context.Context, pluginSvc pluginManagementListPrewarmer) {
+	if pluginSvc == nil {
+		return
+	}
+	prewarmCtx := context.WithoutCancel(ctx)
+	go func() {
+		startedAt := time.Now()
+		if err := pluginSvc.PrewarmManagementList(prewarmCtx); err != nil {
+			logger.Debugf(
+				prewarmCtx,
+				"prewarm plugin management list finished status=failed duration=%s",
+				time.Since(startedAt).Round(time.Millisecond),
+			)
+			logger.Warningf(prewarmCtx, "prewarm plugin management list failed: %v", err)
+			return
+		}
+		logger.Debugf(
+			prewarmCtx,
+			"prewarm plugin management list finished status=succeeded duration=%s",
+			time.Since(startedAt).Round(time.Millisecond),
+		)
+	}()
 }
 
 // logHTTPStartupSummary emits the startup metric summary without ORM SQL text.

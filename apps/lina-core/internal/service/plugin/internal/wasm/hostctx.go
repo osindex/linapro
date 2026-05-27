@@ -6,10 +6,12 @@ package wasm
 
 import (
 	"context"
+	"errors"
+	"path"
 	"strings"
 
-	bridgecontract "lina-core/pkg/pluginbridge/contract"
-	bridgehostservice "lina-core/pkg/pluginbridge/hostservice"
+	bridgecontract "lina-core/pkg/plugin/pluginbridge/contract"
+	bridgehostservice "lina-core/pkg/plugin/pluginbridge/protocol"
 )
 
 // hostCallContextKey is the private context key for host call state.
@@ -25,6 +27,11 @@ type hostCallContext struct {
 	capabilities map[string]struct{}
 	// hostServices is the structured host service authorization snapshot for this plugin.
 	hostServices []*bridgehostservice.HostServiceSpec
+	// artifactDefaultConfig is the active-release default config content.
+	artifactDefaultConfig []byte
+	// artifactManifestResources contains active-release manifest resources
+	// keyed relative to manifest/.
+	artifactManifestResources map[string][]byte
 	// executionSource identifies what triggered this Wasm execution.
 	executionSource bridgecontract.ExecutionSource
 	// routePath records the matched route path when execution is request-bound.
@@ -86,27 +93,30 @@ func (hcc *hostCallContext) hasHostServiceAccess(service string, method string, 
 			continue
 		}
 		methods := spec.Methods
-		if len(methods) == 0 && normalizedService == bridgehostservice.HostServiceConfig {
-			methods = []string{
-				bridgehostservice.HostServiceMethodConfigGet,
-				bridgehostservice.HostServiceMethodConfigExists,
-				bridgehostservice.HostServiceMethodConfigString,
-				bridgehostservice.HostServiceMethodConfigBool,
-				bridgehostservice.HostServiceMethodConfigInt,
-				bridgehostservice.HostServiceMethodConfigDuration,
-			}
+		if len(methods) == 0 {
+			methods = defaultHostServiceMethods(normalizedService)
 		}
 		if !containsString(methods, normalizedMethod) {
 			continue
 		}
-		if normalizedService == bridgehostservice.HostServiceStorage && normalizedResourceRef != "" {
-			return matchAuthorizedStoragePath(hcc.hostServices, normalizedResourceRef) != ""
+		if normalizedService == bridgehostservice.HostServiceStorage {
+			return normalizedResourceRef != "" && matchAuthorizedStoragePath(hcc.hostServices, normalizedResourceRef) != ""
 		}
-		if normalizedService == bridgehostservice.HostServiceNetwork && normalizedResourceRef != "" {
-			return hcc.hostServiceResource(normalizedService, normalizedResourceRef) != nil
+		if normalizedService == bridgehostservice.HostServiceNetwork {
+			return normalizedResourceRef != "" && hcc.hostServiceResource(normalizedService, normalizedResourceRef) != nil
 		}
-		if normalizedTable != "" {
-			return containsString(spec.Tables, normalizedTable)
+		if normalizedService == bridgehostservice.HostServiceHostConfig {
+			return normalizedResourceRef != "" && containsString(spec.Keys, normalizedResourceRef)
+		}
+		if normalizedService == bridgehostservice.HostServiceManifest {
+			return normalizedResourceRef != "" && matchAuthorizedManifestPath(spec.Paths, normalizedResourceRef)
+		}
+		if normalizedService == bridgehostservice.HostServiceData {
+			return normalizedTable != "" && containsString(spec.Tables, normalizedTable)
+		}
+		if normalizedService == bridgehostservice.HostServiceOrg ||
+			normalizedService == bridgehostservice.HostServiceTenant {
+			return normalizedResourceRef == "" && normalizedTable == ""
 		}
 		if normalizedResourceRef == "" {
 			return len(spec.Resources) == 0 && len(spec.Tables) == 0
@@ -151,6 +161,21 @@ func (hcc *hostCallContext) hostServiceResource(service string, resourceRef stri
 	return nil
 }
 
+// defaultHostServiceMethods returns runtime defaults for declarations normalized
+// before the get-only read service migration.
+func defaultHostServiceMethods(service string) []string {
+	switch service {
+	case bridgehostservice.HostServiceConfig:
+		return []string{bridgehostservice.HostServiceMethodConfigGet}
+	case bridgehostservice.HostServiceHostConfig:
+		return []string{bridgehostservice.HostServiceMethodHostConfigGet}
+	case bridgehostservice.HostServiceManifest:
+		return []string{bridgehostservice.HostServiceMethodManifestGet}
+	default:
+		return nil
+	}
+}
+
 // hostServiceSpec returns the authorized service snapshot for one logical service.
 // hostServiceSpec returns the authorized host-service specification for the service.
 func (hcc *hostCallContext) hostServiceSpec(service string) *bridgehostservice.HostServiceSpec {
@@ -177,4 +202,52 @@ func containsString(items []string, target string) bool {
 		}
 	}
 	return false
+}
+
+// matchAuthorizedManifestPath reports whether target is covered by one exact or glob path.
+func matchAuthorizedManifestPath(patterns []string, target string) bool {
+	normalizedTarget, err := normalizeManifestAuthorizedPath(target)
+	if err != nil {
+		return false
+	}
+	for _, rawPattern := range patterns {
+		normalizedPattern, patternErr := normalizeManifestAuthorizedPath(rawPattern)
+		if patternErr != nil {
+			continue
+		}
+		if matched, matchErr := path.Match(normalizedPattern, normalizedTarget); matchErr == nil && matched {
+			return true
+		}
+		if normalizedPattern == normalizedTarget {
+			return true
+		}
+	}
+	return false
+}
+
+// normalizeManifestAuthorizedPath validates the path enough for authorization matching.
+func normalizeManifestAuthorizedPath(value string) (string, error) {
+	raw := strings.ReplaceAll(strings.TrimSpace(value), "\\", "/")
+	if raw == "" || raw == "." {
+		return "", errors.New("invalid manifest host service resource")
+	}
+	if strings.Contains(raw, "://") || strings.HasPrefix(raw, "/") {
+		return "", errors.New("invalid manifest host service resource")
+	}
+	if len(raw) >= 2 && ((raw[0] >= 'A' && raw[0] <= 'Z') || (raw[0] >= 'a' && raw[0] <= 'z')) && raw[1] == ':' {
+		return "", errors.New("invalid manifest host service resource")
+	}
+	normalized := path.Clean(raw)
+	if normalized == "." || normalized == ".." || strings.HasPrefix(normalized, "../") {
+		return "", errors.New("invalid manifest host service resource")
+	}
+	if normalized == "manifest" || strings.HasPrefix(normalized, "manifest/") {
+		return "", errors.New("invalid manifest host service resource")
+	}
+	for _, reserved := range []string{"config", "sql", "i18n"} {
+		if normalized == reserved || strings.HasPrefix(normalized, reserved+"/") {
+			return "", errors.New("invalid manifest host service resource")
+		}
+	}
+	return normalized, nil
 }

@@ -23,9 +23,10 @@ import (
 	i18nsvc "lina-core/internal/service/i18n"
 	"lina-core/internal/service/jobhandler"
 	"lina-core/internal/service/jobmeta"
-	"lina-core/internal/service/orgcap"
 	"lina-core/internal/service/role"
-	tenantcapsvc "lina-core/internal/service/tenantcap"
+	"lina-core/pkg/plugin/capability/contract"
+	"lina-core/pkg/plugin/capability/orgcap"
+	tenantcapsvc "lina-core/pkg/plugin/capability/tenantcap"
 )
 
 // noopScheduler keeps job-management unit tests focused on validation and persistence.
@@ -59,6 +60,22 @@ func (s jobmgmtStaticBizCtx) Init(_ *ghttp.Request, _ *model.Context) {}
 
 // Get returns the configured business context.
 func (s jobmgmtStaticBizCtx) Get(context.Context) *model.Context { return s.ctx }
+
+// Current returns the plugin-visible business context projection.
+func (s jobmgmtStaticBizCtx) Current(context.Context) contract.CurrentContext {
+	if s.ctx == nil {
+		return contract.CurrentContext{}
+	}
+	return contract.CurrentContext{
+		UserID:          s.ctx.UserId,
+		Username:        s.ctx.Username,
+		TenantID:        s.ctx.TenantId,
+		ActingUserID:    s.ctx.ActingUserId,
+		ActingAsTenant:  s.ctx.ActingAsTenant,
+		IsImpersonation: s.ctx.IsImpersonation,
+		PlatformBypass:  s.ctx.TenantId == 0,
+	}
+}
 
 // SetLocale is unused by job-management service tests.
 func (s jobmgmtStaticBizCtx) SetLocale(context.Context, string) {}
@@ -195,7 +212,7 @@ func newTestServiceWithExplicitDependencies(
 	i18nSvc := i18nsvc.New(bizCtxSvc, configSvc, cachecoord.Default(nil))
 	orgCapSvc := orgcap.New(nil)
 	tenantSvc := tenantcapsvc.New(nil, bizCtxSvc)
-	roleSvc := role.New(nil, bizCtxSvc, configSvc, i18nSvc, nil, orgCapSvc, tenantSvc)
+	roleSvc := role.New(nil, bizCtxSvc, configSvc, i18nSvc, nil, tenantSvc)
 	scopeSvc := datascope.New(bizCtxSvc, roleSvc, orgCapSvc)
 	roleSvc.SetDataScopeService(scopeSvc)
 	return New(bizCtxSvc, configSvc, i18nSvc, registry, scheduler, scopeSvc).(*serviceImpl)
@@ -212,7 +229,7 @@ func setJobMgmtTestBizCtx(svc *serviceImpl, bizCtxSvc bizctx.Service) {
 	i18nSvc := i18nsvc.New(bizCtxSvc, configSvc, cachecoord.Default(nil))
 	orgCapSvc := orgcap.New(nil)
 	tenantSvc := tenantcapsvc.New(nil, bizCtxSvc)
-	roleSvc := role.New(nil, bizCtxSvc, configSvc, i18nSvc, nil, orgCapSvc, tenantSvc)
+	roleSvc := role.New(nil, bizCtxSvc, configSvc, i18nSvc, nil, tenantSvc)
 	scopeSvc := datascope.New(bizCtxSvc, roleSvc, orgCapSvc)
 	roleSvc.SetDataScopeService(scopeSvc)
 	svc.scopeSvc = scopeSvc

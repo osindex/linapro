@@ -82,6 +82,14 @@ find hack/tests/e2e/<module> -maxdepth 1 -type f -name 'TC*.ts' | sort
 find apps/lina-plugins/<plugin-id>/hack/tests/e2e/<module> -maxdepth 1 -type f -name 'TC*.ts' | sort
 ```
 
+**外部规则文件：**
+- 读取 `AGENTS.md` 作为顶层规范入口。
+- 必须按 `AGENTS.md` 的强制规则加载矩阵识别反馈命中的规则域，并在记录任务、修改规范、修复代码或输出审查结论前读取所有对应的 `.agents/rules/*.md`。
+- 禁止仅凭记忆、历史上下文、摘要或此前读取记录替代本次读取。
+- 若触发场景命中但对应规则文件不存在、无法读取或存在无法调和的规则冲突，不得继续反馈修复；必须先修复规则入口或向用户说明阻断原因。
+- 每个反馈都必须评估并记录 `i18n`、缓存一致性、数据权限、开发工具跨平台和测试影响。若存在影响，必须读取对应规则文件并按其中的设计、实现、验证和审查要求执行；若确认无影响，也必须在该反馈的影响分析或审查结论中明确记录。
+- 常见规则域包括但不限于：后端 Go 读取 `.agents/rules/backend-go.md`；API 契约读取 `.agents/rules/api-contract.md`；SQL 和 DAO 读取 `.agents/rules/database.md`；缓存读取 `.agents/rules/cache-consistency.md`；数据权限读取 `.agents/rules/data-permission.md`；源码插件、动态插件、插件同构开发目录和插件生命周期资源读取 `.agents/rules/plugin.md`；前端 UI 读取 `.agents/rules/frontend-ui.md`；测试读取 `.agents/rules/testing.md`；开发工具读取 `.agents/rules/dev-tooling.md`；文档治理读取 `.agents/rules/documentation.md`；OpenSpec 流程读取 `.agents/rules/openspec.md`；`i18n` 读取 `.agents/rules/i18n.md`。
+
 ---
 
 ### 3. 分析和组织问题
@@ -192,7 +200,7 @@ THEN 父级选择器应禁用当前菜单及所有子菜单
 
 ```bash
 # 示例：查找用户 API 变更的相关测试，包含宿主和源码插件自有 E2E
-rg -l "api/user" hack/tests/e2e apps/lina-plugins -g 'TC*.ts'
+git grep -l "api/user" -- 'hack/tests/e2e/**/TC*.ts' 'apps/lina-plugins/**/TC*.ts'
 ```
 
 告知：
@@ -202,6 +210,13 @@ rg -l "api/user" hack/tests/e2e apps/lina-plugins -g 'TC*.ts'
 - 受影响模块：菜单管理
 - 回归测试：hack/tests/e2e/iam/menu/TC001-menu-crud.ts, hack/tests/e2e/iam/menu/TC002-auth-menu.ts
 ```
+
+同时必须记录：
+- `i18n` 影响：涉及时列出资源归属、目标语言、验证命令；不涉及时写明无运行时行为、前端 UI、API 文档源文本、插件清单或语言包资源影响。
+- 缓存一致性影响：涉及时说明权威数据源、失效机制和分布式策略；不涉及时写明无缓存影响。
+- 数据权限影响：涉及时说明读写边界和验证；不涉及时写明无数据操作影响。
+- 开发工具跨平台影响：涉及时说明验证；不涉及时写明无开发工具或脚本影响。
+- 外部规则加载影响：列出已按 `AGENTS.md` 命中的 `.agents/rules/*.md`；若某规则域确认无影响，写明无影响判断。命中规则但未读取对应规则文件时，不得标记该反馈完成。
 
 **f. 验证（标记完成前必须执行）**
 

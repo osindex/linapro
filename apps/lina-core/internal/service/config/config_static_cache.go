@@ -30,7 +30,6 @@ type staticConfigCaches struct {
 	jwt              staticConfigBox[JwtConfig]
 	logger           staticConfigBox[LoggerConfig]
 	metadata         staticConfigBox[MetadataConfig]
-	monitor          staticConfigBox[MonitorConfig]
 	health           staticConfigBox[HealthConfig]
 	shutdown         staticConfigBox[ShutdownConfig]
 	scheduler        staticConfigBox[SchedulerConfig]
@@ -136,15 +135,6 @@ func cloneMetadataConfig(cfg *MetadataConfig) *MetadataConfig {
 		cloned.Frontend = append([]MetadataComponentInfo(nil), cfg.Frontend...)
 	}
 	return cloned
-}
-
-// cloneMonitorConfig returns a detached copy of the cached monitor config.
-func cloneMonitorConfig(cfg *MonitorConfig) *MonitorConfig {
-	if cfg == nil {
-		return nil
-	}
-	cloned := *cfg
-	return &cloned
 }
 
 // cloneHealthConfig returns a detached copy of the cached health config.

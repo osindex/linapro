@@ -380,13 +380,14 @@ func (s *serviceImpl) buildDynamicRoutePermissionMenuSpecs(manifest *catalog.Man
 }
 
 // dynamicRoutePermissionParentKey returns the plugin menu that should own
-// synthetic route-permission buttons. The first non-button root menu is the
-// plugin entry point in current manifests; if none exists, route permissions
-// keep the legacy root placement.
+// synthetic route-permission buttons. Prefer a non-button plugin root menu, and
+// fall back to the first non-button plugin menu when the plugin mounts under a
+// stable host catalog such as the extension center.
 func dynamicRoutePermissionParentKey(manifest *catalog.Manifest) string {
 	if manifest == nil {
 		return ""
 	}
+	fallbackKey := ""
 	for _, spec := range manifest.Menus {
 		if spec == nil || strings.TrimSpace(spec.Key) == "" {
 			continue
@@ -394,19 +395,15 @@ func dynamicRoutePermissionParentKey(manifest *catalog.Manifest) string {
 		if catalog.NormalizeMenuType(spec.Type) == catalog.MenuTypeButton {
 			continue
 		}
+		key := strings.TrimSpace(spec.Key)
+		if fallbackKey == "" {
+			fallbackKey = key
+		}
 		if strings.TrimSpace(spec.ParentKey) == "" {
-			return strings.TrimSpace(spec.Key)
+			return key
 		}
 	}
-	for _, spec := range manifest.Menus {
-		if spec == nil || strings.TrimSpace(spec.Key) == "" {
-			continue
-		}
-		if catalog.NormalizeMenuType(spec.Type) != catalog.MenuTypeButton {
-			return strings.TrimSpace(spec.Key)
-		}
-	}
-	return ""
+	return fallbackKey
 }
 
 // resolveDynamicRoutePermissionParentID maps the synthetic permission menu's
@@ -416,7 +413,7 @@ func (s *serviceImpl) resolveDynamicRoutePermissionParentID(
 	existingByKey map[string]*entity.SysMenu,
 ) (int, error) {
 	if spec == nil || strings.TrimSpace(spec.ParentKey) == "" {
-		return 0, nil
+		return 0, gerror.Newf("dynamic route permission menu requires a plugin parent menu: %s", spec.Key)
 	}
 	parent, ok := existingByKey[strings.TrimSpace(spec.ParentKey)]
 	if !ok || parent == nil || parent.DeletedAt != nil {
@@ -440,7 +437,7 @@ func isDynamicRoutePermissionMenuKey(menuKey string) bool {
 // buildDynamicRoutePermissionMenuRemark returns the stable remark used for
 // synthetic permission menus generated from dynamic routes.
 func buildDynamicRoutePermissionMenuRemark(pluginID string) string {
-	return catalog.MenuRemarkPrefix + strings.TrimSpace(pluginID) + catalog.DynamicRoutePermissionMenuRemarkSuffix
+	return "dynamic route permission for plugin " + strings.TrimSpace(pluginID)
 }
 
 // listDeclaredPluginMenuKeys returns the normalized set of menu keys declared

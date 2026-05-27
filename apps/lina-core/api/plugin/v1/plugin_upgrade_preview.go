@@ -85,4 +85,6 @@ type PluginUpgradeHostServiceChange struct {
 	ToTables          []string `json:"toTables,omitempty" dc:"Target data-table set after upgrade" eg:"[]"`
 	FromPaths         []string `json:"fromPaths,omitempty" dc:"Effective storage path set before upgrade" eg:"[\"reports/\"]"`
 	ToPaths           []string `json:"toPaths,omitempty" dc:"Target storage path set after upgrade" eg:"[\"reports/\",\"exports/\"]"`
+	FromKeys          []string `json:"fromKeys,omitempty" dc:"Effective public host config key set before upgrade" eg:"[\"workspace.basePath\"]"`
+	ToKeys            []string `json:"toKeys,omitempty" dc:"Target public host config key set after upgrade" eg:"[\"workspace.basePath\",\"i18n.default\"]"`
 }

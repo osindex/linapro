@@ -17,7 +17,7 @@ type Service interface {
 	FrontendConfigReader
 	I18nConfigReader
 	CronConfigReader
-	HostRuntimeConfigReader
+	HostOperationsConfigReader
 	DeliveryMetadataConfigReader
 	PluginConfigReader
 	UploadConfigReader
@@ -91,14 +91,12 @@ type CronConfigReader interface {
 	GetCronLogRetention(ctx context.Context) (*CronLogRetentionConfig, error)
 }
 
-// HostRuntimeConfigReader reads process-level host runtime settings.
-type HostRuntimeConfigReader interface {
+// HostOperationsConfigReader reads process-level host operation settings.
+type HostOperationsConfigReader interface {
 	// GetServerExtensions reads LinaPro-specific server extension settings from configuration file.
 	GetServerExtensions(ctx context.Context) *ServerExtensionsConfig
 	// GetLogger reads logger config from configuration file.
 	GetLogger(ctx context.Context) *LoggerConfig
-	// GetMonitor reads monitor config from configuration file.
-	GetMonitor(ctx context.Context) *MonitorConfig
 	// GetHealth reads health probe config from configuration file.
 	GetHealth(ctx context.Context) *HealthConfig
 	// GetShutdown reads graceful-shutdown config from configuration file.

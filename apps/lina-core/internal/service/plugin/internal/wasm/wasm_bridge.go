@@ -9,8 +9,8 @@ import (
 	"github.com/gogf/gf/v2/errors/gerror"
 	"github.com/tetratelabs/wazero"
 
-	bridgecodec "lina-core/pkg/pluginbridge/codec"
-	bridgecontract "lina-core/pkg/pluginbridge/contract"
+	bridgecontract "lina-core/pkg/plugin/pluginbridge/contract"
+	bridgecodec "lina-core/pkg/plugin/pluginbridge/protocol"
 )
 
 // ExecuteBridge executes one bridge request against the archived active wasm
@@ -45,14 +45,16 @@ func ExecuteBridge(
 	// Inject host call context so that host function callbacks can access
 	// plugin identity and capabilities.
 	ctx = withHostCallContext(ctx, &hostCallContext{
-		pluginID:        input.PluginID,
-		capabilities:    input.Capabilities,
-		hostServices:    input.HostServices,
-		executionSource: input.ExecutionSource,
-		routePath:       input.RoutePath,
-		requestID:       input.RequestID,
-		identity:        input.Identity,
-		cronCollector:   input.CronCollector,
+		pluginID:                  input.PluginID,
+		capabilities:              input.Capabilities,
+		hostServices:              input.HostServices,
+		artifactDefaultConfig:     append([]byte(nil), input.ArtifactDefaultConfig...),
+		artifactManifestResources: cloneExecutionManifestResources(input.ArtifactManifestResources),
+		executionSource:           input.ExecutionSource,
+		routePath:                 input.RoutePath,
+		requestID:                 input.RequestID,
+		identity:                  input.Identity,
+		cronCollector:             input.CronCollector,
 	})
 
 	var (
@@ -105,6 +107,19 @@ func ExecuteBridge(
 		return nil, err
 	}
 	return response, nil
+}
+
+// cloneExecutionManifestResources detaches release-bound manifest resources for
+// one execution so host functions cannot mutate caller-owned maps.
+func cloneExecutionManifestResources(source map[string][]byte) map[string][]byte {
+	if len(source) == 0 {
+		return nil
+	}
+	clone := make(map[string][]byte, len(source))
+	for path, content := range source {
+		clone[path] = append([]byte(nil), content...)
+	}
+	return clone
 }
 
 // decodeDynamicResponsePointer unpacks the bridge return value into pointer and length.

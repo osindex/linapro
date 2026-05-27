@@ -14,16 +14,15 @@ import (
 	"lina-core/internal/dao"
 	"lina-core/internal/model/do"
 	"lina-core/internal/service/plugin/internal/catalog"
-	"lina-core/pkg/pluginbridge"
-	plugindbhost "lina-core/pkg/plugindb/host"
-	"lina-core/pkg/plugindb/shared"
+	plugindatahost "lina-core/internal/service/plugin/internal/datahost/internal/host"
+	"lina-core/pkg/plugin/pluginbridge/protocol"
 )
 
 // TestExecuteCRUDLifecycle verifies governed create, list, get, update, and delete flows.
 func TestExecuteCRUDLifecycle(t *testing.T) {
 	ctx := context.Background()
 	resource := buildTestNodeStateResource()
-	identity := &pluginbridge.IdentitySnapshotV1{
+	identity := &protocol.IdentitySnapshotV1{
 		UserID:       1,
 		Username:     "admin",
 		DataScope:    1,
@@ -48,10 +47,11 @@ func TestExecuteCRUDLifecycle(t *testing.T) {
 		ctx,
 		"test-plugin-data",
 		resource.Table,
-		pluginbridge.ExecutionSourceRoute,
+		protocol.ExecutionSourceRoute,
 		identity,
+		nil,
 		resource,
-		&pluginbridge.HostServiceDataMutationRequest{
+		&protocol.HostServiceDataMutationRequest{
 			RecordJSON: mustMarshalJSON(t, createRecord),
 		},
 	)
@@ -63,17 +63,24 @@ func TestExecuteCRUDLifecycle(t *testing.T) {
 		t.Fatalf("expected create response key, got %#v", createResponse)
 	}
 
+	listPlanJSON := mustMarshalJSON(t, map[string]any{
+		"table":  resource.Table,
+		"action": "list",
+		"filters": []map[string]any{
+			{"field": "pluginId", "operator": "eq", "valueJson": mustMarshalJSON(t, pluginMarker)},
+		},
+		"page": map[string]any{"pageNum": 1, "pageSize": 10},
+	})
 	listResponse, err := ExecuteList(
 		ctx,
 		"test-plugin-data",
 		resource.Table,
-		pluginbridge.ExecutionSourceRoute,
+		protocol.ExecutionSourceRoute,
 		identity,
+		nil,
 		resource,
-		&pluginbridge.HostServiceDataListRequest{
-			Filters:  map[string]string{"pluginId": pluginMarker},
-			PageNum:  1,
-			PageSize: 10,
+		&protocol.HostServiceDataListRequest{
+			PlanJSON: listPlanJSON,
 		},
 	)
 	if err != nil {
@@ -83,15 +90,21 @@ func TestExecuteCRUDLifecycle(t *testing.T) {
 		t.Fatalf("unexpected list response: %#v", listResponse)
 	}
 
+	getPlanJSON := mustMarshalJSON(t, map[string]any{
+		"table":   resource.Table,
+		"action":  "get",
+		"keyJson": append([]byte(nil), createResponse.KeyJSON...),
+	})
 	getResponse, err := ExecuteGet(
 		ctx,
 		"test-plugin-data",
 		resource.Table,
-		pluginbridge.ExecutionSourceRoute,
+		protocol.ExecutionSourceRoute,
 		identity,
+		nil,
 		resource,
-		&pluginbridge.HostServiceDataGetRequest{
-			KeyJSON: createResponse.KeyJSON,
+		&protocol.HostServiceDataGetRequest{
+			PlanJSON: getPlanJSON,
 		},
 	)
 	if err != nil {
@@ -109,10 +122,11 @@ func TestExecuteCRUDLifecycle(t *testing.T) {
 		ctx,
 		"test-plugin-data",
 		resource.Table,
-		pluginbridge.ExecutionSourceRoute,
+		protocol.ExecutionSourceRoute,
 		identity,
+		nil,
 		resource,
-		&pluginbridge.HostServiceDataMutationRequest{
+		&protocol.HostServiceDataMutationRequest{
 			KeyJSON: createResponse.KeyJSON,
 			RecordJSON: mustMarshalJSON(t, map[string]any{
 				"currentState": "running",
@@ -131,10 +145,11 @@ func TestExecuteCRUDLifecycle(t *testing.T) {
 		ctx,
 		"test-plugin-data",
 		resource.Table,
-		pluginbridge.ExecutionSourceRoute,
+		protocol.ExecutionSourceRoute,
 		identity,
+		nil,
 		resource,
-		&pluginbridge.HostServiceDataMutationRequest{
+		&protocol.HostServiceDataMutationRequest{
 			KeyJSON: createResponse.KeyJSON,
 		},
 	)
@@ -151,7 +166,7 @@ func TestExecuteCRUDLifecycle(t *testing.T) {
 func TestExecuteTransactionAppliesMutationsAtomically(t *testing.T) {
 	ctx := context.Background()
 	resource := buildTestNodeStateResourceWithNodeKey()
-	identity := &pluginbridge.IdentitySnapshotV1{
+	identity := &protocol.IdentitySnapshotV1{
 		UserID:       1,
 		Username:     "admin",
 		DataScope:    1,
@@ -168,13 +183,14 @@ func TestExecuteTransactionAppliesMutationsAtomically(t *testing.T) {
 		ctx,
 		"test-plugin-data",
 		resource.Table,
-		pluginbridge.ExecutionSourceRoute,
+		protocol.ExecutionSourceRoute,
 		identity,
+		nil,
 		resource,
-		&pluginbridge.HostServiceDataTransactionRequest{
-			Operations: []*pluginbridge.HostServiceDataTransactionOperation{
+		&protocol.HostServiceDataTransactionRequest{
+			Operations: []*protocol.HostServiceDataTransactionOperation{
 				{
-					Method: pluginbridge.HostServiceMethodDataCreate,
+					Method: protocol.HostServiceMethodDataCreate,
 					RecordJSON: mustMarshalJSON(t, map[string]any{
 						"pluginId":     pluginMarker,
 						"releaseId":    1,
@@ -186,7 +202,7 @@ func TestExecuteTransactionAppliesMutationsAtomically(t *testing.T) {
 					}),
 				},
 				{
-					Method:  pluginbridge.HostServiceMethodDataUpdate,
+					Method:  protocol.HostServiceMethodDataUpdate,
 					KeyJSON: mustMarshalJSON(t, nodeKey),
 					RecordJSON: mustMarshalJSON(t, map[string]any{
 						"currentState": "running",
@@ -202,15 +218,21 @@ func TestExecuteTransactionAppliesMutationsAtomically(t *testing.T) {
 		t.Fatalf("unexpected transaction response: %#v", response)
 	}
 
+	getPlanJSON := mustMarshalJSON(t, map[string]any{
+		"table":   resource.Table,
+		"action":  "get",
+		"keyJson": mustMarshalJSON(t, nodeKey),
+	})
 	getResponse, err := ExecuteGet(
 		ctx,
 		"test-plugin-data",
 		resource.Table,
-		pluginbridge.ExecutionSourceRoute,
+		protocol.ExecutionSourceRoute,
 		identity,
+		nil,
 		resource,
-		&pluginbridge.HostServiceDataGetRequest{
-			KeyJSON: mustMarshalJSON(t, nodeKey),
+		&protocol.HostServiceDataGetRequest{
+			PlanJSON: getPlanJSON,
 		},
 	)
 	if err != nil {
@@ -241,9 +263,9 @@ CREATE TABLE test_datahost_identity_contract (
 	}
 
 	resource, err := BuildAuthorizedTableContract(ctx, tableName, []string{
-		pluginbridge.HostServiceMethodDataCreate,
-		pluginbridge.HostServiceMethodDataList,
-		pluginbridge.HostServiceMethodDataUpdate,
+		protocol.HostServiceMethodDataCreate,
+		protocol.HostServiceMethodDataList,
+		protocol.HostServiceMethodDataUpdate,
 	})
 	if err != nil {
 		t.Fatalf("build authorized table contract failed: %v", err)
@@ -262,11 +284,12 @@ CREATE TABLE test_datahost_identity_contract (
 	}
 }
 
-// TestExecuteListSupportsPlugindbPlan verifies typed plugindb list plans are honored.
-func TestExecuteListSupportsPlugindbPlan(t *testing.T) {
+// TestExecuteListSupportsDataCapabilityPlan verifies typed data capability
+// list plans are honored.
+func TestExecuteListSupportsDataCapabilityPlan(t *testing.T) {
 	ctx := context.Background()
 	resource := buildTestNodeStateResource()
-	identity := &pluginbridge.IdentitySnapshotV1{
+	identity := &protocol.IdentitySnapshotV1{
 		UserID:       1,
 		Username:     "admin",
 		DataScope:    1,
@@ -302,39 +325,40 @@ func TestExecuteListSupportsPlugindbPlan(t *testing.T) {
 			ctx,
 			"test-plugin-data",
 			resource.Table,
-			pluginbridge.ExecutionSourceRoute,
+			protocol.ExecutionSourceRoute,
 			identity,
+			nil,
 			resource,
-			&pluginbridge.HostServiceDataMutationRequest{RecordJSON: mustMarshalJSON(t, item)},
+			&protocol.HostServiceDataMutationRequest{RecordJSON: mustMarshalJSON(t, item)},
 		); err != nil {
 			t.Fatalf("ExecuteCreate failed: %v", err)
 		}
 	}
 
-	planJSON, err := shared.MarshalQueryPlanJSON(&shared.DataQueryPlan{
-		Table:  resource.Table,
-		Action: shared.DataPlanActionList,
-		Fields: []string{"nodeKey", "currentState"},
-		Filters: []*shared.DataFilter{
-			mustNewEQFilter(t, "pluginId", pluginMarker),
-			mustNewINFilter(t, "currentState", []string{"pending", "running"}),
-			mustNewLikeFilter(t, "nodeKey", "adv-"),
+	planJSON := mustMarshalJSON(t, map[string]any{
+		"table":  resource.Table,
+		"action": "list",
+		"fields": []string{"nodeKey", "currentState"},
+		"filters": []map[string]any{
+			{"field": "pluginId", "operator": "eq", "valueJson": mustMarshalJSON(t, pluginMarker)},
+			{"field": "currentState", "operator": "in", "valuesJson": [][]byte{mustMarshalJSON(t, "pending"), mustMarshalJSON(t, "running")}},
+			{"field": "nodeKey", "operator": "like", "valueJson": mustMarshalJSON(t, "adv-")},
 		},
-		Orders: []*shared.DataOrder{shared.NewDESCOrder("nodeKey")},
-		Page:   &shared.DataPagination{PageNum: 1, PageSize: 10},
+		"orders": []map[string]any{
+			{"field": "nodeKey", "direction": "desc"},
+		},
+		"page": map[string]any{"pageNum": 1, "pageSize": 10},
 	})
-	if err != nil {
-		t.Fatalf("MarshalQueryPlanJSON failed: %v", err)
-	}
 
 	listResponse, err := ExecuteList(
 		ctx,
 		"test-plugin-data",
 		resource.Table,
-		pluginbridge.ExecutionSourceRoute,
+		protocol.ExecutionSourceRoute,
 		identity,
+		nil,
 		resource,
-		&pluginbridge.HostServiceDataListRequest{PlanJSON: planJSON},
+		&protocol.HostServiceDataListRequest{PlanJSON: planJSON},
 	)
 	if err != nil {
 		t.Fatalf("ExecuteList failed: %v", err)
@@ -350,24 +374,22 @@ func TestExecuteListSupportsPlugindbPlan(t *testing.T) {
 		t.Fatalf("expected selected fields only, got %#v", firstRecord)
 	}
 
-	countPlanJSON, err := shared.MarshalQueryPlanJSON(&shared.DataQueryPlan{
-		Table:  resource.Table,
-		Action: shared.DataPlanActionCount,
-		Filters: []*shared.DataFilter{
-			mustNewEQFilter(t, "pluginId", pluginMarker),
+	countPlanJSON := mustMarshalJSON(t, map[string]any{
+		"table":  resource.Table,
+		"action": "count",
+		"filters": []map[string]any{
+			{"field": "pluginId", "operator": "eq", "valueJson": mustMarshalJSON(t, pluginMarker)},
 		},
 	})
-	if err != nil {
-		t.Fatalf("MarshalQueryPlanJSON count failed: %v", err)
-	}
 	countResponse, err := ExecuteList(
 		ctx,
 		"test-plugin-data",
 		resource.Table,
-		pluginbridge.ExecutionSourceRoute,
+		protocol.ExecutionSourceRoute,
 		identity,
+		nil,
 		resource,
-		&pluginbridge.HostServiceDataListRequest{PlanJSON: countPlanJSON},
+		&protocol.HostServiceDataListRequest{PlanJSON: countPlanJSON},
 	)
 	if err != nil {
 		t.Fatalf("ExecuteList count failed: %v", err)
@@ -404,12 +426,12 @@ func TestBuildResourceRecordWithSelectionFallsBackToColumnName(t *testing.T) {
 	}
 }
 
-// TestExecuteGetSupportsPlugindbFieldSelection verifies typed get plans can
+// TestExecuteGetSupportsDataCapabilityFieldSelection verifies typed get plans can
 // restrict the returned field selection.
-func TestExecuteGetSupportsPlugindbFieldSelection(t *testing.T) {
+func TestExecuteGetSupportsDataCapabilityFieldSelection(t *testing.T) {
 	ctx := context.Background()
 	resource := buildTestNodeStateResource()
-	identity := &pluginbridge.IdentitySnapshotV1{
+	identity := &protocol.IdentitySnapshotV1{
 		UserID:       1,
 		Username:     "admin",
 		DataScope:    1,
@@ -425,10 +447,11 @@ func TestExecuteGetSupportsPlugindbFieldSelection(t *testing.T) {
 		ctx,
 		"test-plugin-data",
 		resource.Table,
-		pluginbridge.ExecutionSourceRoute,
+		protocol.ExecutionSourceRoute,
 		identity,
+		nil,
 		resource,
-		&pluginbridge.HostServiceDataMutationRequest{
+		&protocol.HostServiceDataMutationRequest{
 			RecordJSON: mustMarshalJSON(t, map[string]any{
 				"pluginId":     pluginMarker,
 				"releaseId":    1,
@@ -444,24 +467,21 @@ func TestExecuteGetSupportsPlugindbFieldSelection(t *testing.T) {
 		t.Fatalf("ExecuteCreate failed: %v", err)
 	}
 
-	planJSON, err := shared.MarshalQueryPlanJSON(&shared.DataQueryPlan{
-		Table:   resource.Table,
-		Action:  shared.DataPlanActionGet,
-		Fields:  []string{"currentState"},
-		KeyJSON: append([]byte(nil), createResponse.KeyJSON...),
+	planJSON := mustMarshalJSON(t, map[string]any{
+		"table":   resource.Table,
+		"action":  "get",
+		"fields":  []string{"currentState"},
+		"keyJson": append([]byte(nil), createResponse.KeyJSON...),
 	})
-	if err != nil {
-		t.Fatalf("MarshalQueryPlanJSON failed: %v", err)
-	}
 	getResponse, err := ExecuteGet(
 		ctx,
 		"test-plugin-data",
 		resource.Table,
-		pluginbridge.ExecutionSourceRoute,
+		protocol.ExecutionSourceRoute,
 		identity,
+		nil,
 		resource,
-		&pluginbridge.HostServiceDataGetRequest{
-			KeyJSON:  append([]byte(nil), createResponse.KeyJSON...),
+		&protocol.HostServiceDataGetRequest{
 			PlanJSON: planJSON,
 		},
 	)
@@ -484,10 +504,10 @@ func TestPluginDataDBDoCommitRejectsUnauthorizedTable(t *testing.T) {
 	if err != nil {
 		t.Fatalf("getPluginDataDB failed: %v", err)
 	}
-	ctx := withPluginDataAudit(context.Background(), &plugindbhost.AuditMetadata{
+	ctx := withPluginDataAudit(context.Background(), &plugindatahost.AuditMetadata{
 		PluginID:      "test-plugin-data",
 		Table:         "sys_plugin_node_state",
-		Method:        pluginbridge.HostServiceMethodDataDelete,
+		Method:        protocol.HostServiceMethodDataDelete,
 		ResourceTable: "sys_plugin_node_state",
 	})
 	_, err = db.Ctx(ctx).Exec(ctx, "DELETE FROM sys_plugin WHERE plugin_id = ?", "forbidden")
@@ -523,12 +543,12 @@ func buildTestNodeStateResource() *catalog.ResourceSpec {
 			Direction: catalog.ResourceOrderDirectionASC.String(),
 		},
 		Operations: []string{
-			pluginbridge.HostServiceMethodDataList,
-			pluginbridge.HostServiceMethodDataGet,
-			pluginbridge.HostServiceMethodDataCreate,
-			pluginbridge.HostServiceMethodDataUpdate,
-			pluginbridge.HostServiceMethodDataDelete,
-			pluginbridge.HostServiceMethodDataTransaction,
+			protocol.HostServiceMethodDataList,
+			protocol.HostServiceMethodDataGet,
+			protocol.HostServiceMethodDataCreate,
+			protocol.HostServiceMethodDataUpdate,
+			protocol.HostServiceMethodDataDelete,
+			protocol.HostServiceMethodDataTransaction,
 		},
 		KeyField: "id",
 		WritableFields: []string{
@@ -615,34 +635,4 @@ func mustUnmarshalJSONRecord(t *testing.T, data []byte) map[string]any {
 		t.Fatalf("json unmarshal record failed: %v", err)
 	}
 	return record
-}
-
-// mustNewEQFilter builds an equality filter and fails the test on validation error.
-func mustNewEQFilter(t *testing.T, field string, value any) *shared.DataFilter {
-	t.Helper()
-	filter, err := shared.NewEQFilter(field, value)
-	if err != nil {
-		t.Fatalf("build eq filter failed: %v", err)
-	}
-	return filter
-}
-
-// mustNewINFilter builds an IN filter and fails the test on validation error.
-func mustNewINFilter(t *testing.T, field string, values any) *shared.DataFilter {
-	t.Helper()
-	filter, err := shared.NewINFilter(field, values)
-	if err != nil {
-		t.Fatalf("build in filter failed: %v", err)
-	}
-	return filter
-}
-
-// mustNewLikeFilter builds a LIKE filter and fails the test on validation error.
-func mustNewLikeFilter(t *testing.T, field string, value any) *shared.DataFilter {
-	t.Helper()
-	filter, err := shared.NewLikeFilter(field, value)
-	if err != nil {
-		t.Fatalf("build like filter failed: %v", err)
-	}
-	return filter
 }

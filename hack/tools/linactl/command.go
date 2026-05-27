@@ -46,10 +46,9 @@ func commandRegistry() map[string]commandSpec {
 		{Name: "agents.prompts.unlink", Description: "Remove repository-local prompts symlinks managed by agents.prompts.link.", Usage: "linactl agents.prompts.unlink agent=<name|all|csv>", Run: runAgentsPromptsUnlink},
 		{Name: "agents.md.link", Description: "Manage repository-local symlinks from supported agents' private guide files to AGENTS.md.", Usage: "linactl agents.md.link [agent=<name|all|csv>] [force=1]", Run: runAgentsMdLink},
 		{Name: "agents.md.unlink", Description: "Remove repository-local AGENTS.md symlinks managed by agents.md.link.", Usage: "linactl agents.md.unlink agent=<name|all|csv>", Run: runAgentsMdUnlink},
-		{Name: "cli", Description: "Install or update the GoFrame CLI.", Usage: "linactl cli", Internal: true, Run: runCLIInstall},
-		{Name: "cli.install", Description: "Install the GoFrame CLI only when missing.", Usage: "linactl cli.install", Internal: true, Run: runCLIInstallIfMissing},
 		{Name: "ctrl", Description: "Generate GoFrame controllers.", Usage: "linactl ctrl", Internal: true, Run: runCtrl},
 		{Name: "dao", Description: "Generate GoFrame DAO/DO/Entity files.", Usage: "linactl dao", Internal: true, Run: runDao},
+		{Name: "__goframe", Description: "Run embedded GoFrame code generation.", Usage: "linactl __goframe gen <ctrl|dao>", Hidden: true, Run: runEmbeddedGoFrame},
 	}
 
 	registry := make(map[string]commandSpec, len(specs))

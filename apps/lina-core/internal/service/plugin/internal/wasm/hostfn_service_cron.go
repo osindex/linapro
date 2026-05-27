@@ -6,9 +6,9 @@ package wasm
 import (
 	"context"
 
-	bridgecontract "lina-core/pkg/pluginbridge/contract"
-	bridgehostcall "lina-core/pkg/pluginbridge/hostcall"
-	bridgehostservice "lina-core/pkg/pluginbridge/hostservice"
+	bridgecontract "lina-core/pkg/plugin/pluginbridge/contract"
+	bridgehostcall "lina-core/pkg/plugin/pluginbridge/protocol"
+	bridgehostservice "lina-core/pkg/plugin/pluginbridge/protocol"
 )
 
 // CronRegistrationCollector captures dynamic-plugin cron declarations during

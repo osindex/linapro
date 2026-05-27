@@ -8,8 +8,8 @@ import (
 
 	"github.com/tetratelabs/wazero"
 
-	bridgecontract "lina-core/pkg/pluginbridge/contract"
-	bridgehostservice "lina-core/pkg/pluginbridge/hostservice"
+	bridgecontract "lina-core/pkg/plugin/pluginbridge/contract"
+	bridgehostservice "lina-core/pkg/plugin/pluginbridge/protocol"
 )
 
 // ExecutionInput carries the minimum manifest data needed to run one bridge call.
@@ -24,6 +24,12 @@ type ExecutionInput struct {
 	Capabilities map[string]struct{}
 	// HostServices is the structured host service authorization snapshot for this plugin.
 	HostServices []*bridgehostservice.HostServiceSpec
+	// ArtifactDefaultConfig is the active-release manifest/config/config.yaml
+	// content used as the lowest-priority plugin config source.
+	ArtifactDefaultConfig []byte
+	// ArtifactManifestResources stores active-release manifest declaration
+	// resources keyed relative to manifest/.
+	ArtifactManifestResources map[string][]byte
 	// ExecutionSource identifies what triggered this bridge execution.
 	ExecutionSource bridgecontract.ExecutionSource
 	// RoutePath is the matched dynamic route path when execution is route-bound.

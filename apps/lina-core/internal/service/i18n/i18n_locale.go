@@ -60,7 +60,7 @@ func (s *serviceImpl) loadEnabledRuntimeLocales(ctx context.Context) []LocaleDes
 // loadConfiguredRuntimeLocales returns file-backed runtime locales discovered
 // from host i18n JSON files, with metadata from the default config i18n section.
 func (s *serviceImpl) loadConfiguredRuntimeLocales(ctx context.Context, config *hostconfig.I18nConfig) []LocaleDescriptor {
-	discoveredLocales := discoverHostRuntimeLocaleFiles(ctx)
+	discoveredLocales := discoverHostConfigLocaleFiles(ctx)
 	if len(discoveredLocales) == 0 {
 		configuredLocales := buildRuntimeLocalesFromConfig(config)
 		if len(configuredLocales) > 0 {
@@ -71,9 +71,9 @@ func (s *serviceImpl) loadConfiguredRuntimeLocales(ctx context.Context, config *
 	return buildConfiguredRuntimeLocales(discoveredLocales, config)
 }
 
-// discoverHostRuntimeLocaleFiles lists host manifest/i18n/<locale> directories
+// discoverHostConfigLocaleFiles lists host manifest/i18n/<locale> directories
 // that contain direct runtime JSON files.
-func discoverHostRuntimeLocaleFiles(ctx context.Context) []string {
+func discoverHostConfigLocaleFiles(ctx context.Context) []string {
 	entries, err := fs.ReadDir(packed.Files, hostI18nDir)
 	if err != nil {
 		logger.Warningf(ctx, "scan host i18n locale resources failed dir=%s err=%v", hostI18nDir, err)
@@ -90,7 +90,7 @@ func discoverHostRuntimeLocaleFiles(ctx context.Context) []string {
 		if locale == "" {
 			continue
 		}
-		if hostRuntimeLocaleDirectoryHasJSON(ctx, locale) {
+		if hostConfigLocaleDirectoryHasJSON(ctx, locale) {
 			locales = append(locales, locale)
 		}
 	}
@@ -98,9 +98,9 @@ func discoverHostRuntimeLocaleFiles(ctx context.Context) []string {
 	return locales
 }
 
-// hostRuntimeLocaleDirectoryHasJSON reports whether a locale directory has at
+// hostConfigLocaleDirectoryHasJSON reports whether a locale directory has at
 // least one direct runtime JSON file. Nested apidoc resources do not count.
-func hostRuntimeLocaleDirectoryHasJSON(ctx context.Context, locale string) bool {
+func hostConfigLocaleDirectoryHasJSON(ctx context.Context, locale string) bool {
 	dir := hostI18nDir + "/" + locale
 	entries, err := fs.ReadDir(packed.Files, dir)
 	if err != nil {

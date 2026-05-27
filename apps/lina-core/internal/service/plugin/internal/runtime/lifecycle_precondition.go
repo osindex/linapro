@@ -15,9 +15,9 @@ import (
 
 	"lina-core/internal/service/plugin/internal/catalog"
 	"lina-core/internal/service/plugin/internal/wasm"
-	bridgecodec "lina-core/pkg/pluginbridge/codec"
-	bridgecontract "lina-core/pkg/pluginbridge/contract"
-	"lina-core/pkg/pluginhost"
+	bridgecontract "lina-core/pkg/plugin/pluginbridge/contract"
+	bridgecodec "lina-core/pkg/plugin/pluginbridge/protocol"
+	"lina-core/pkg/plugin/pluginhost"
 )
 
 // DynamicLifecycleInput carries host-owned fields published to one dynamic
@@ -102,14 +102,16 @@ func (s *serviceImpl) RunDynamicLifecycleCallback(
 	}
 
 	response, err := wasm.ExecuteBridge(handlerCtx, wasm.ExecutionInput{
-		PluginID:        manifest.ID,
-		ArtifactPath:    manifest.RuntimeArtifact.Path,
-		BridgeSpec:      manifest.BridgeSpec,
-		Capabilities:    manifest.HostCapabilities,
-		HostServices:    manifest.HostServices,
-		ExecutionSource: bridgecontract.ExecutionSourceLifecycle,
-		RoutePath:       contract.InternalPath,
-		RequestID:       requestEnvelope.RequestID,
+		PluginID:                  manifest.ID,
+		ArtifactPath:              manifest.RuntimeArtifact.Path,
+		BridgeSpec:                manifest.BridgeSpec,
+		Capabilities:              manifest.HostCapabilities,
+		HostServices:              manifest.HostServices,
+		ArtifactDefaultConfig:     buildArtifactDefaultConfig(manifest),
+		ArtifactManifestResources: buildArtifactManifestResources(manifest),
+		ExecutionSource:           bridgecontract.ExecutionSourceLifecycle,
+		RoutePath:                 contract.InternalPath,
+		RequestID:                 requestEnvelope.RequestID,
 	}, requestContent)
 	if err != nil {
 		decision.OK = false

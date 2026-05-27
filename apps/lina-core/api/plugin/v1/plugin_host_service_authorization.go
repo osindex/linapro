@@ -8,17 +8,19 @@ import jobv1 "lina-core/api/job/v1"
 // submitted during plugin install or enable flows.
 type HostServiceAuthorizationReq struct {
 	// Services contains one authorization decision for each resource-scoped host service.
-	Services []*HostServiceAuthorizationServiceReq `json:"services" dc:"The service authorization set after confirmation by the host; methods and governance target sets can be narrowed by service. Storage uses paths, network, etc. uses resourceRefs, and data uses tables; an empty array indicates that all resource applications are rejected this time." eg:"[]"`
+	Services []*HostServiceAuthorizationServiceReq `json:"services" dc:"The service authorization set after confirmation by the host; methods and governance target sets can be narrowed by service. Storage and manifest use paths, hostConfig uses keys, network and low-priority services use resourceRefs, and data uses tables; an empty array indicates that all resource applications are rejected this time." eg:"[]"`
 }
 
 // HostServiceAuthorizationServiceReq describes one service-level authorization decision.
 type HostServiceAuthorizationServiceReq struct {
 	// Service is the logical host service identifier.
-	Service string `json:"service" dc:"Host service identifier, such as storage, network, data" eg:"network"`
+	Service string `json:"service" dc:"Host service identifier, such as storage, network, data, hostConfig, manifest" eg:"network"`
 	// Methods optionally narrows the requested methods; when omitted, all plugin-declared methods are used.
 	Methods []string `json:"methods,omitempty" dc:"The set of methods confirmed by the host. If not passed, all methods declared by the plugin will be used." eg:"[\"request\"]"`
 	// Paths lists the confirmed logical storage paths; an empty array rejects all paths under this service.
-	Paths []string `json:"paths,omitempty" dc:"A set of logical paths after confirmation by the host, only used by the storage service; a single path or a directory prefix path can be declared. An empty array indicates that all path applications under the service are rejected." eg:"[\"reports/\"]"`
+	Paths []string `json:"paths,omitempty" dc:"A set of logical paths after confirmation by the host, used by storage and manifest services; a single path, directory prefix path, or service-supported glob can be declared. An empty array indicates that all path applications under the service are rejected." eg:"[\"reports/\"]"`
+	// Keys lists the confirmed public host config keys; an empty array rejects all keys under this service.
+	Keys []string `json:"keys,omitempty" dc:"The public host config keys after confirmation by the host. It is only used by hostConfig service. An empty array means rejecting all key applications under the service." eg:"[\"workspace.basePath\"]"`
 	// ResourceRefs lists the confirmed resource refs; an empty array rejects all resource refs under this service.
 	ResourceRefs []string `json:"resourceRefs,omitempty" dc:"The collection of governance targets after host confirmation; network uses URL mode, low-priority services continue to use logical resourceRef, and an empty array means rejecting all resource applications under the service." eg:"[\"https://*.example.com/api\"]"`
 	// Tables lists the confirmed data tables; an empty array rejects all tables under this service.
@@ -28,11 +30,13 @@ type HostServiceAuthorizationServiceReq struct {
 // HostServicePermissionItem describes one requested or authorized host service block.
 type HostServicePermissionItem struct {
 	// Service is the logical host service identifier.
-	Service string `json:"service" dc:"Host service identifier, such as runtime, cron, storage, network, data" eg:"storage"`
+	Service string `json:"service" dc:"Host service identifier, such as runtime, cron, storage, network, data, config, hostConfig, manifest" eg:"storage"`
 	// Methods lists the confirmed or requested methods.
 	Methods []string `json:"methods" dc:"The set of methods allowed under this host service" eg:"[\"put\",\"get\"]"`
 	// Paths lists the governed logical storage paths under this service.
-	Paths []string `json:"paths,omitempty" dc:"The set of logical paths allowed to be accessed under this host service, only used by storage service" eg:"[\"reports/\"]"`
+	Paths []string `json:"paths,omitempty" dc:"The set of logical paths allowed to be accessed under this host service, used by storage and manifest services" eg:"[\"reports/\"]"`
+	// Keys lists the governed public host config keys under this service.
+	Keys []string `json:"keys,omitempty" dc:"The public host config keys allowed to be accessed under this host service, only used by hostConfig service" eg:"[\"workspace.basePath\"]"`
 	// Tables lists the governed data tables under this service.
 	Tables []string `json:"tables,omitempty" dc:"The collection of data tables allowed to be accessed under this host service, only used by data service" eg:"[\"sys_plugin_node_state\"]"`
 	// TableItems lists the governed data tables together with host-resolved display comments.

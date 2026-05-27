@@ -35,7 +35,11 @@ func (s *serviceImpl) UpdateTenantProvisioningPolicy(
 		catalog.NormalizeInstallMode(registry.InstallMode) != catalog.InstallModeTenantScoped {
 		return bizerr.NewCode(CodePluginTenantProvisioningPolicyInvalid, bizerr.P("pluginId", normalizedPluginID))
 	}
-	return s.catalogSvc.SetAutoEnableForNewTenants(ctx, normalizedPluginID, autoEnableForNewTenants)
+	if err = s.catalogSvc.SetAutoEnableForNewTenants(ctx, normalizedPluginID, autoEnableForNewTenants); err != nil {
+		return err
+	}
+	_, err = s.markRuntimeCacheChanged(ctx, "plugin_tenant_provisioning_policy_updated")
+	return err
 }
 
 // registrySupportsTenantGovernance resolves the current manifest declaration

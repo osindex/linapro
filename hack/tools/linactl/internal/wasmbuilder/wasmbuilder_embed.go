@@ -148,6 +148,9 @@ func loadRuntimeBuildManifest(pluginDir string, embeddedResources *embeddedStati
 		if !ok {
 			return nil, fmt.Errorf("dynamic plugin embedded resources missing plugin.yaml")
 		}
+		if err := validateManifestDependencySchema(content, "embedded plugin.yaml"); err != nil {
+			return nil, err
+		}
 		if err := yaml.Unmarshal(content, manifest); err != nil {
 			return nil, fmt.Errorf("failed to load dynamic plugin manifest from embedded resources: %w", err)
 		}
@@ -155,6 +158,13 @@ func loadRuntimeBuildManifest(pluginDir string, embeddedResources *embeddedStati
 	}
 
 	manifestPath := filepath.Join(pluginDir, "plugin.yaml")
+	content, err := os.ReadFile(manifestPath)
+	if err != nil {
+		return nil, err
+	}
+	if err := validateManifestDependencySchema(content, manifestPath); err != nil {
+		return nil, err
+	}
 	if err := loadYAMLFile(manifestPath, manifest); err != nil {
 		return nil, fmt.Errorf("failed to load dynamic plugin manifest: %w", err)
 	}
@@ -281,6 +291,98 @@ func collectI18NAssets(pluginDir string, embeddedResources *embeddedStaticResour
 
 func collectAPIDocI18NAssets(pluginDir string, embeddedResources *embeddedStaticResourceSet) ([]*i18nAsset, error) {
 	return collectLocaleJSONAssets(pluginDir, embeddedResources, "manifest/i18n", "apidoc", true)
+}
+
+func collectManifestResources(pluginDir string, embeddedResources *embeddedStaticResourceSet) ([]*manifestResource, error) {
+	if embeddedResources != nil {
+		paths := embeddedResources.ListFiles("manifest", ".yaml")
+		resources := make([]*manifestResource, 0, len(paths))
+		for _, filePath := range paths {
+			if !isPackagedManifestResourcePath(filePath) {
+				continue
+			}
+			content, ok := embeddedResources.ReadFile(filePath)
+			if !ok {
+				return nil, fmt.Errorf("embedded manifest resource not found: %s", filePath)
+			}
+			resources = append(resources, &manifestResource{
+				Path:          filePath,
+				ContentBase64: base64.StdEncoding.EncodeToString(content),
+			})
+		}
+		return resources, nil
+	}
+
+	rootDir := filepath.Join(pluginDir, "manifest")
+	paths := make([]string, 0)
+	if err := filepath.WalkDir(rootDir, func(filePath string, entry os.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			if filePath == rootDir && os.IsNotExist(walkErr) {
+				return nil
+			}
+			return walkErr
+		}
+		if entry == nil {
+			return nil
+		}
+		if filePath != rootDir && shouldSkipEmbeddedDirectoryEntry(entry.Name()) {
+			if entry.IsDir() {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if entry.IsDir() || filepath.Ext(entry.Name()) != ".yaml" {
+			return nil
+		}
+		relativePath, err := filepath.Rel(pluginDir, filePath)
+		if err != nil {
+			return err
+		}
+		normalizedPath := filepath.ToSlash(relativePath)
+		if isPackagedManifestResourcePath(normalizedPath) {
+			paths = append(paths, filePath)
+		}
+		return nil
+	}); err != nil {
+		return nil, err
+	}
+
+	sort.Strings(paths)
+	resources := make([]*manifestResource, 0, len(paths))
+	for _, filePath := range paths {
+		relativePath, err := filepath.Rel(pluginDir, filePath)
+		if err != nil {
+			return nil, err
+		}
+		content, err := os.ReadFile(filePath)
+		if err != nil {
+			return nil, err
+		}
+		resources = append(resources, &manifestResource{
+			Path:          filepath.ToSlash(relativePath),
+			ContentBase64: base64.StdEncoding.EncodeToString(content),
+		})
+	}
+	return resources, nil
+}
+
+func isPackagedManifestResourcePath(value string) bool {
+	normalizedPath := filepath.ToSlash(filepath.Clean(strings.TrimSpace(value)))
+	if normalizedPath == "." {
+		return false
+	}
+	if normalizedPath == "manifest/config/config.yaml" || normalizedPath == "manifest/config/config.example.yaml" {
+		return true
+	}
+	if !strings.HasPrefix(normalizedPath, "manifest/") {
+		return false
+	}
+	for _, reserved := range []string{"manifest/config", "manifest/sql", "manifest/i18n"} {
+		if normalizedPath == reserved || strings.HasPrefix(normalizedPath, reserved+"/") {
+			return false
+		}
+	}
+	return filepath.Ext(normalizedPath) == ".yaml"
 }
 
 func collectLocaleJSONAssets(

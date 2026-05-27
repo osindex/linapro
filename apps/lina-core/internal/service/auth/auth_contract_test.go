@@ -22,7 +22,13 @@ func TestServiceContractDoesNotExposeTenantWorkflow(t *testing.T) {
 // available through the explicit narrow interface.
 func TestTenantTokenIssuerOwnsTenantTokenWorkflow(t *testing.T) {
 	issuerType := reflect.TypeOf((*TenantTokenIssuer)(nil)).Elem()
-	for _, methodName := range []string{"IssueTenantToken", "ReissueTenantToken", "ReissueTenantTokenFromBearer"} {
+	for _, methodName := range []string{
+		"IssueTenantToken",
+		"ReissueTenantToken",
+		"ReissueTenantTokenFromBearer",
+		"IssueImpersonationToken",
+		"RevokeImpersonationToken",
+	} {
 		if _, ok := issuerType.MethodByName(methodName); !ok {
 			t.Fatalf("TenantTokenIssuer must expose tenant token method %s", methodName)
 		}

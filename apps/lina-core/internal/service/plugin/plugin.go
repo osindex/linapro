@@ -24,12 +24,13 @@ import (
 	sourceupgradeinternal "lina-core/internal/service/plugin/internal/sourceupgrade"
 	"lina-core/internal/service/pluginruntimecache"
 	"lina-core/internal/service/session"
-	tenantcapsvc "lina-core/internal/service/tenantcap"
+	orgcapsvc "lina-core/pkg/plugin/capability/orgcap"
+	tenantcapsvc "lina-core/pkg/plugin/capability/tenantcap"
 
 	"lina-core/internal/model/entity"
 
-	"lina-core/pkg/pluginhost"
-	sourceupgradecontract "lina-core/pkg/sourceupgrade/contract"
+	"lina-core/pkg/plugin/capability"
+	"lina-core/pkg/plugin/pluginhost"
 )
 
 type (
@@ -90,8 +91,8 @@ type (
 		// startupAutoEnable marks install requests initiated by plugin.autoEnable
 		// startup bootstrap for the explicitly configured target plugin.
 		startupAutoEnable bool
-		// dependencyResult records the server-side dependency plan and automatic
-		// installation result produced during this install request.
+		// dependencyResult records the server-side dependency check produced
+		// during this install request.
 		dependencyResult *DependencyCheckResult
 	}
 
@@ -208,6 +209,10 @@ type RuntimeUpgradeHostServiceChange struct {
 	FromPaths []string
 	// ToPaths is the target storage path set after upgrade.
 	ToPaths []string
+	// FromKeys is the effective public host config key set before upgrade.
+	FromKeys []string
+	// ToKeys is the target public host config key set after upgrade.
+	ToKeys []string
 }
 
 // RuntimeUpgradeResult describes one completed explicit runtime upgrade action.
@@ -329,8 +334,8 @@ type SourceIntegrationService interface {
 	ListSourceRouteBindings() []pluginhost.SourceRouteBinding
 	// RegisterCrons registers callback-contributed cron jobs for source plugins.
 	RegisterCrons(ctx context.Context) error
-	// SetHostServices wires the host-published service directory used by source plugins.
-	SetHostServices(services pluginhost.HostServices)
+	// SetCapabilities wires the host-published capability services used by source plugins.
+	SetCapabilities(capabilities capability.Services)
 	// ListExecutableCronJobs returns plugin-owned cron definitions whose
 	// handlers are safe to publish for execution. Dynamic plugins must be in
 	// an enabled business-entry state; disabled, pending-upgrade, abnormal, and
@@ -419,6 +424,12 @@ type LifecycleManagementService interface {
 	IsInstalled(ctx context.Context, pluginID string) bool
 	// IsEnabled returns whether a plugin is enabled.
 	IsEnabled(ctx context.Context, pluginID string) bool
+	// IsProviderEnabled returns whether pluginID is platform-enabled for framework capability provider use.
+	IsProviderEnabled(ctx context.Context, pluginID string) bool
+	// OrgProviderEnv returns typed, plugin-scoped organization-provider construction inputs.
+	OrgProviderEnv(pluginID string) orgcapsvc.ProviderEnv
+	// TenantProviderEnv returns typed, plugin-scoped tenant-provider construction inputs.
+	TenantProviderEnv(pluginID string) tenantcapsvc.ProviderEnv
 	// IsEnabledAuthoritative returns whether pluginID is installed, enabled, and
 	// allowed to expose business entries after forcing a persisted governance
 	// read instead of reusing process-local platform snapshots. It preserves the
@@ -445,19 +456,24 @@ type LifecycleManagementService interface {
 type SourceUpgradeGovernanceService interface {
 	// ListSourceUpgradeStatuses scans source manifests and returns one
 	// effective-versus-discovered upgrade-status item per source plugin.
-	ListSourceUpgradeStatuses(ctx context.Context) ([]*sourceupgradecontract.SourcePluginStatus, error)
+	ListSourceUpgradeStatuses(ctx context.Context) ([]*SourceUpgradeStatus, error)
 	// UpgradeSourcePlugin applies one explicit source-plugin upgrade from the
 	// current effective version to the newer discovered source version.
-	UpgradeSourcePlugin(ctx context.Context, pluginID string) (*sourceupgradecontract.SourcePluginUpgradeResult, error)
+	UpgradeSourcePlugin(ctx context.Context, pluginID string) (*SourceUpgradeResult, error)
 	// ValidateSourcePluginUpgradeReadiness scans source-plugin version drift
 	// without failing on pending upgrades; list/runtime state exposes the result.
 	ValidateSourcePluginUpgradeReadiness(ctx context.Context) error
 	// ValidateStartupConsistency fails fast when persisted plugin and tenant
 	// governance state is incoherent before routes are served.
 	ValidateStartupConsistency(ctx context.Context) error
-	// SetTenantCapability wires the runtime-owned tenant capability used by
-	// startup consistency checks that span plugin and tenant governance.
-	SetTenantCapability(service tenantcapsvc.Service)
+	// SetTenantStartupCapability wires tenant provider availability and startup consistency checks.
+	SetTenantStartupCapability(service pluginTenantStartupCapability)
+	// SetTenantProvisioningCapability wires tenant plugin auto-provisioning.
+	SetTenantProvisioningCapability(service tenantcapsvc.PluginProvisioningService)
+	// SetTenantPlatformGovernanceCapability wires platform-scope plugin governance checks.
+	SetTenantPlatformGovernanceCapability(service platformGovernanceTenantCapability)
+	// SetOrganizationCapability wires the runtime-owned organization capability used by plugin resource scopes.
+	SetOrganizationCapability(service orgcapsvc.Service)
 }
 
 // RegistryQueryService defines manifest synchronization and plugin list query operations.
@@ -477,6 +493,8 @@ type RegistryQueryService interface {
 	List(ctx context.Context, in ListInput) (*ListOutput, error)
 	// Get returns one read-only plugin detail projection by exact plugin ID.
 	Get(ctx context.Context, pluginID string) (*PluginItem, error)
+	// PrewarmManagementList builds the complete plugin management list read model.
+	PrewarmManagementList(ctx context.Context) error
 	// PreviewRuntimeUpgrade returns a side-effect-free upgrade preview for one pending plugin.
 	PreviewRuntimeUpgrade(ctx context.Context, pluginID string) (*RuntimeUpgradePreview, error)
 	// ExecuteRuntimeUpgrade runs one explicit runtime upgrade after confirmation.
@@ -559,6 +577,8 @@ type serviceImpl struct {
 	frontendSvc frontend.Service
 	// openapiSvc projects dynamic routes into the host OpenAPI document.
 	openapiSvc openapi.Service
+	// capabilities exposes runtime-owned adapters for lazy provider construction.
+	capabilities capability.Services
 	// i18nSvc localizes plugin lifecycle messages and invalidates runtime
 	// translation bundles after plugin lifecycle mutations.
 	i18nSvc pluginI18nService
@@ -566,8 +586,14 @@ type serviceImpl struct {
 	runtimeCacheRevisionCtrl *pluginruntimecache.Controller
 	// runtimeUpgradeLockStore coordinates explicit runtime upgrades across cluster nodes.
 	runtimeUpgradeLockStore coordination.LockStore
-	// tenantSvc validates tenant-governance startup state through the runtime-owned tenant capability.
-	tenantSvc tenantcapsvc.Service
+	// managementListCache stores the complete plugin-management read model.
+	managementListCache pluginManagementListCache
+	// tenantStartup validates tenant-governance startup state through a narrow tenant capability.
+	tenantStartup pluginTenantStartupCapability
+	// tenantProvisioning provisions tenant-scoped auto-enabled plugins after startup policy convergence.
+	tenantProvisioning tenantcapsvc.PluginProvisioningService
+	// tenantGovernance guards platform plugin-governance writes in HTTP paths.
+	tenantGovernance platformGovernanceTenantCapability
 	// runtimeUpgradeLocksMu protects process-local runtime-upgrade locks.
 	runtimeUpgradeLocksMu sync.Mutex
 	// runtimeUpgradeLocks serializes explicit runtime upgrades per plugin in the current process.
@@ -608,19 +634,12 @@ func New(
 	}
 
 	var (
-		catalogSvc       = catalog.New(configProvider)
-		lifecycleSvc     = lifecycle.New(catalogSvc)
-		frontendSvc      = frontend.New(catalogSvc)
-		openapiSvc       = openapi.New(catalogSvc)
-		runtimeSvc       = runtime.New(catalogSvc, lifecycleSvc, frontendSvc, openapiSvc, i18nSvc)
-		integrationSvc   = integration.New(catalogSvc)
-		cacheRevisionCtl = newRuntimeCacheRevisionController(
-			topo,
-			cacheCoordSvc,
-			integrationSvc,
-			frontendSvc,
-			i18nSvc,
-		)
+		catalogSvc     = catalog.New(configProvider)
+		lifecycleSvc   = lifecycle.New(catalogSvc)
+		frontendSvc    = frontend.New(catalogSvc)
+		openapiSvc     = openapi.New(catalogSvc)
+		runtimeSvc     = runtime.New(catalogSvc, lifecycleSvc, frontendSvc, openapiSvc, i18nSvc)
+		integrationSvc = integration.New(catalogSvc)
 	)
 
 	// Wire cross-package dependencies via setter injection so each sub-package
@@ -651,19 +670,26 @@ func New(
 	runtimeSvc.SetSessionStore(sessionStore)
 
 	service := &serviceImpl{
-		configSvc:                configProvider,
-		topology:                 topo,
-		catalogSvc:               catalogSvc,
-		lifecycleSvc:             lifecycleSvc,
-		runtimeSvc:               runtimeSvc,
-		integrationSvc:           integrationSvc,
-		frontendSvc:              frontendSvc,
-		openapiSvc:               openapiSvc,
-		i18nSvc:                  i18nSvc,
-		runtimeCacheRevisionCtrl: cacheRevisionCtl,
-		runtimeUpgradeLockStore:  runtimeUpgradeLockStore,
-		runtimeUpgradeLocks:      make(map[string]*sync.Mutex),
+		configSvc:               configProvider,
+		topology:                topo,
+		catalogSvc:              catalogSvc,
+		lifecycleSvc:            lifecycleSvc,
+		runtimeSvc:              runtimeSvc,
+		integrationSvc:          integrationSvc,
+		frontendSvc:             frontendSvc,
+		openapiSvc:              openapiSvc,
+		i18nSvc:                 i18nSvc,
+		runtimeUpgradeLockStore: runtimeUpgradeLockStore,
+		runtimeUpgradeLocks:     make(map[string]*sync.Mutex),
 	}
+	service.runtimeCacheRevisionCtrl = newRuntimeCacheRevisionController(
+		topo,
+		cacheCoordSvc,
+		integrationSvc,
+		frontendSvc,
+		i18nSvc,
+		service,
+	)
 	runtimeSvc.SetRuntimeCacheChangeNotifier(service)
 	runtimeSvc.SetDependencyValidator(service)
 	service.sourceUpgradeSvc = sourceupgradeinternal.New(catalogSvc, lifecycleSvc, runtimeSvc, integrationSvc, i18nSvc, service)

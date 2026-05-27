@@ -18,8 +18,8 @@ import (
 	"lina-core/internal/service/plugin/internal/openapi"
 	"lina-core/internal/service/pluginruntimecache"
 	"lina-core/internal/service/session"
-	bridgecontract "lina-core/pkg/pluginbridge/contract"
-	"lina-core/pkg/pluginhost"
+	bridgecontract "lina-core/pkg/plugin/pluginbridge/contract"
+	"lina-core/pkg/plugin/pluginhost"
 )
 
 // TopologyProvider abstracts cluster topology information needed by the reconciler.
@@ -243,6 +243,10 @@ type RuntimeReconcilerService interface {
 	// ReconcileRuntimePlugins runs one convergence pass. It is safe to call from
 	// both the background loop and synchronous management flows.
 	ReconcileRuntimePlugins(ctx context.Context) error
+	// RefreshInstalledRuntimePluginReleases repairs same-version installed
+	// dynamic releases whose archived artifact or snapshot is stale while
+	// avoiding install or state-toggle side effects for unrelated registry rows.
+	RefreshInstalledRuntimePluginReleases(ctx context.Context) error
 }
 
 // RuntimeUpgradeService defines explicit dynamic-plugin runtime upgrade operations.

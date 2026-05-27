@@ -9,11 +9,8 @@ import {
   getLog,
   triggerJob,
 } from '../../support/api/job';
-import { waitForRouteReady } from '../../support/ui';
 
 test.describe('TC005 英文环境内置治理数据本地化回归', () => {
-  const hostOnly = process.env.E2E_HOST_ONLY_PLUGINS === '1';
-
   test('TC-1a: 字典管理内置字典类型与数据列表按英文展示', async ({
     adminPage,
     mainLayout,
@@ -138,9 +135,6 @@ test.describe('TC005 英文环境内置治理数据本地化回归', () => {
     await expect(await jobPage.hasJob('任务日志清理')).toBe(false);
 
     await jobLogPage.goto();
-    const expectedJobLogPattern = hostOnly
-      ? /Job Log Cleanup|Online Session Cleanup/
-      : /Job Log Cleanup|Online Session Cleanup|Server Monitor Collection|Server Monitor Cleanup/;
     await expect
       .poll(async () =>
         adminPage
@@ -148,7 +142,7 @@ test.describe('TC005 英文环境内置治理数据本地化回归', () => {
           .first()
           .innerText(),
       )
-      .toMatch(expectedJobLogPattern);
+      .toMatch(/Job Log Cleanup|Online Session Cleanup/);
 
     const jobLogText = await adminPage
       .locator('[data-testid="job-log-page"] .vxe-table--body')
@@ -157,91 +151,5 @@ test.describe('TC005 英文环境内置治理数据本地化回归', () => {
     expect(jobLogText).not.toMatch(
       /默认分组|任务日志清理|在线会话清理|服务监控采集|服务监控清理/,
     );
-  });
-
-  test('TC-1c: 审计日志与登录日志列表按英文展示内置类型、状态和摘要', async ({
-    adminPage,
-    mainLayout,
-  }) => {
-    test.skip(hostOnly, 'Login and operation log APIs are provided by source plugins.');
-
-    const api = await createAdminApiContext();
-    try {
-      const loginLogData = await expectSuccess<{
-        items: Array<{ msg: string; status: number }>;
-        total: number;
-      }>(
-        await api.get('loginlog?pageNum=1&pageSize=10', {
-          headers: { 'Accept-Language': 'en-US' },
-        }),
-      );
-      expect(loginLogData.items.some((item) => item.msg === 'Login successful')).toBe(
-        true,
-      );
-      const response = await api.get('dict/type/export?pageNum=1&pageSize=1');
-      expect(response.ok()).toBeTruthy();
-      await expectSuccess(await api.post('auth/logout'));
-    } finally {
-      await api.dispose();
-    }
-
-    const auditApi = await createAdminApiContext();
-    try {
-      const operLogData = await expectSuccess<{
-        items: Array<{
-          operSummary: string;
-          operType: string;
-          status: number;
-          title: string;
-        }>;
-      }>(
-        await auditApi.get('operlog?pageNum=1&pageSize=20', {
-          headers: { 'Accept-Language': 'en-US' },
-        }),
-      );
-      const logoutLog = operLogData.items.find(
-        (item) => item.title === 'Authentication' && item.operSummary === 'User logout',
-      );
-      expect(logoutLog?.operType).toBe('create');
-      expect(logoutLog?.status).toBe(0);
-
-      const exportLog = operLogData.items.find(
-        (item) =>
-          item.title === 'Dictionary Management' &&
-          item.operSummary === 'Export dictionary type',
-      );
-      expect(exportLog?.operType).toBe('export');
-      expect(exportLog?.status).toBe(0);
-    } finally {
-      await auditApi.dispose();
-    }
-
-    await mainLayout.switchLanguage('English');
-
-    await adminPage.goto('/monitor/loginlog');
-    await waitForRouteReady(adminPage);
-    await expect
-      .poll(async () => adminPage.locator('body').innerText())
-      .toContain('Login successful');
-    const loginLogText = await adminPage.locator('body').innerText();
-    expect(loginLogText).toContain('Success');
-    expect(loginLogText).not.toContain('登录成功');
-
-    await adminPage.goto('/monitor/operlog');
-    await waitForRouteReady(adminPage);
-    await expect
-      .poll(async () => adminPage.locator('body').innerText(), {
-        timeout: 10_000,
-      })
-      .toContain('Export dictionary type');
-    const operLogText = await adminPage.locator('body').innerText();
-    expect(operLogText).toContain('Authentication');
-    expect(operLogText).toContain('User logout');
-    expect(operLogText).toContain('Dictionary Management');
-    expect(operLogText).toContain('Export');
-    expect(operLogText).not.toContain('认证管理');
-    expect(operLogText).not.toContain('用户登出');
-    expect(operLogText).not.toContain('导出字典类型');
-    expect(operLogText).not.toContain('字典管理');
   });
 });

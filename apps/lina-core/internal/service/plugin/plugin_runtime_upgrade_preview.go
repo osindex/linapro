@@ -10,7 +10,7 @@ import (
 	"lina-core/internal/model/entity"
 	"lina-core/internal/service/plugin/internal/catalog"
 	"lina-core/pkg/bizerr"
-	"lina-core/pkg/pluginbridge"
+	"lina-core/pkg/plugin/pluginbridge/protocol"
 )
 
 const (
@@ -283,7 +283,7 @@ func buildRuntimeUpgradeHostServicesDiff(
 }
 
 // snapshotRequestedHostServices returns requested hostServices from one snapshot.
-func snapshotRequestedHostServices(snapshot *catalog.ManifestSnapshot) []*pluginbridge.HostServiceSpec {
+func snapshotRequestedHostServices(snapshot *catalog.ManifestSnapshot) []*protocol.HostServiceSpec {
 	if snapshot == nil {
 		return nil
 	}
@@ -293,9 +293,9 @@ func snapshotRequestedHostServices(snapshot *catalog.ManifestSnapshot) []*plugin
 // normalizeRuntimeUpgradeHostServices normalizes hostServices into one map.
 func normalizeRuntimeUpgradeHostServices(
 	snapshot *catalog.ManifestSnapshot,
-	specs []*pluginbridge.HostServiceSpec,
-) (map[string]*pluginbridge.HostServiceSpec, error) {
-	normalized, err := pluginbridge.NormalizeHostServiceSpecs(specs)
+	specs []*protocol.HostServiceSpec,
+) (map[string]*protocol.HostServiceSpec, error) {
+	normalized, err := protocol.NormalizeHostServiceSpecs(specs)
 	if err != nil {
 		return nil, bizerr.WrapCode(
 			err,
@@ -304,7 +304,7 @@ func normalizeRuntimeUpgradeHostServices(
 			bizerr.P("version", snapshotVersion(snapshot)),
 		)
 	}
-	result := make(map[string]*pluginbridge.HostServiceSpec, len(normalized))
+	result := make(map[string]*protocol.HostServiceSpec, len(normalized))
 	for _, spec := range normalized {
 		if spec == nil || strings.TrimSpace(spec.Service) == "" {
 			continue
@@ -334,8 +334,8 @@ func snapshotVersion(snapshot *catalog.ManifestSnapshot) string {
 // stable summary for API projection.
 func buildRuntimeUpgradeHostServiceChange(
 	service string,
-	fromSpec *pluginbridge.HostServiceSpec,
-	toSpec *pluginbridge.HostServiceSpec,
+	fromSpec *protocol.HostServiceSpec,
+	toSpec *protocol.HostServiceSpec,
 ) *RuntimeUpgradeHostServiceChange {
 	return &RuntimeUpgradeHostServiceChange{
 		Service:           service,
@@ -347,14 +347,16 @@ func buildRuntimeUpgradeHostServiceChange(
 		ToTables:          cloneSortedStrings(hostServiceTables(toSpec)),
 		FromPaths:         cloneSortedStrings(hostServicePaths(fromSpec)),
 		ToPaths:           cloneSortedStrings(hostServicePaths(toSpec)),
+		FromKeys:          cloneSortedStrings(hostServiceKeys(fromSpec)),
+		ToKeys:            cloneSortedStrings(hostServiceKeys(toSpec)),
 	}
 }
 
 // runtimeUpgradeHostServiceChanged reports whether two normalized specs differ
 // in methods or governed targets.
 func runtimeUpgradeHostServiceChanged(
-	fromSpec *pluginbridge.HostServiceSpec,
-	toSpec *pluginbridge.HostServiceSpec,
+	fromSpec *protocol.HostServiceSpec,
+	toSpec *protocol.HostServiceSpec,
 ) bool {
 	if fromSpec == nil || toSpec == nil {
 		return fromSpec != toSpec
@@ -368,11 +370,14 @@ func runtimeUpgradeHostServiceChanged(
 	if !stringSlicesEqual(hostServicePaths(fromSpec), hostServicePaths(toSpec)) {
 		return true
 	}
+	if !stringSlicesEqual(hostServiceKeys(fromSpec), hostServiceKeys(toSpec)) {
+		return true
+	}
 	return !stringSlicesEqual(hostServiceResourceRefs(fromSpec), hostServiceResourceRefs(toSpec))
 }
 
 // hostServiceMethods returns normalized methods from one spec.
-func hostServiceMethods(spec *pluginbridge.HostServiceSpec) []string {
+func hostServiceMethods(spec *protocol.HostServiceSpec) []string {
 	if spec == nil {
 		return nil
 	}
@@ -380,7 +385,7 @@ func hostServiceMethods(spec *pluginbridge.HostServiceSpec) []string {
 }
 
 // hostServiceTables returns normalized data tables from one spec.
-func hostServiceTables(spec *pluginbridge.HostServiceSpec) []string {
+func hostServiceTables(spec *protocol.HostServiceSpec) []string {
 	if spec == nil {
 		return nil
 	}
@@ -388,15 +393,23 @@ func hostServiceTables(spec *pluginbridge.HostServiceSpec) []string {
 }
 
 // hostServicePaths returns normalized storage paths from one spec.
-func hostServicePaths(spec *pluginbridge.HostServiceSpec) []string {
+func hostServicePaths(spec *protocol.HostServiceSpec) []string {
 	if spec == nil {
 		return nil
 	}
 	return spec.Paths
 }
 
+// hostServiceKeys returns normalized public host config keys from one spec.
+func hostServiceKeys(spec *protocol.HostServiceSpec) []string {
+	if spec == nil {
+		return nil
+	}
+	return spec.Keys
+}
+
 // hostServiceResources returns governed resources from one spec.
-func hostServiceResources(spec *pluginbridge.HostServiceSpec) []*pluginbridge.HostServiceResourceSpec {
+func hostServiceResources(spec *protocol.HostServiceSpec) []*protocol.HostServiceResourceSpec {
 	if spec == nil {
 		return nil
 	}
@@ -404,7 +417,7 @@ func hostServiceResources(spec *pluginbridge.HostServiceSpec) []*pluginbridge.Ho
 }
 
 // hostServiceResourceRefs returns normalized resource refs from one spec.
-func hostServiceResourceRefs(spec *pluginbridge.HostServiceSpec) []string {
+func hostServiceResourceRefs(spec *protocol.HostServiceSpec) []string {
 	resources := hostServiceResources(spec)
 	refs := make([]string, 0, len(resources))
 	for _, resource := range resources {

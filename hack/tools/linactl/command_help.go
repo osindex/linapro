@@ -19,6 +19,9 @@ func (a *app) printHelp(includeInternal bool) error {
 	specs := commandRegistry()
 	names := make([]string, 0, len(specs))
 	for name, spec := range specs {
+		if spec.Hidden {
+			continue
+		}
 		if spec.Internal && !includeInternal {
 			continue
 		}

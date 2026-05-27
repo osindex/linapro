@@ -32,15 +32,14 @@ const apiBaseURL =
 const publicBaseURL =
   process.env.E2E_PUBLIC_BASE_URL ?? apiBaseURL.replace(/\/api\/v1\/?$/, '');
 
-// Origin observed by the backend when the frontend dev server proxies a
-// request (vite proxy `target` with `changeOrigin: true` rewrites the Host
-// header to the backend host). Must stay aligned with the vite config so that
-// tests asserting the proxied request origin (e.g. TC0175) remain stable.
-// 前端开发服务器以 changeOrigin 方式代理请求时，后端实际看到的 Host。需与
-// vite.config.mts 中 proxy target 保持一致，供 TC0175 等断言代理 origin 的用例使用。
+// Origin observed by the backend for browser-context requests to backend-owned
+// public routes such as /api.json. By default E2E enters through the backend
+// public origin; override this only when running tests through a proxy that
+// intentionally rewrites the Host header.
+// 浏览器上下文请求 /api.json 等后端公共路由时，后端实际看到的 Host。默认
+// E2E 通过后端公共入口访问；仅当测试环境存在会改写 Host 的代理时才覆盖。
 const frontendProxyBackendOrigin =
-  process.env.E2E_FRONTEND_PROXY_BACKEND_ORIGIN ??
-  backendBaseURL.replace(/\/\/127\.0\.0\.1(?=[:/])/, '//localhost');
+  process.env.E2E_FRONTEND_PROXY_BACKEND_ORIGIN ?? backendBaseURL.replace(/\/$/, '');
 
 export const config = {
   adminUser: process.env.E2E_ADMIN_USER ?? 'admin',

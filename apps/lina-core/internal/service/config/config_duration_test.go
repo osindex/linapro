@@ -1,5 +1,4 @@
-// This file verifies duration-based configuration parsing for JWT, session,
-// and monitor settings.
+// This file verifies duration-based configuration parsing for JWT and session settings.
 
 package config
 
@@ -29,7 +28,6 @@ database:
 	if err != nil {
 		t.Fatalf("get session config: %v", err)
 	}
-	monitorCfg := svc.GetMonitor(ctx)
 
 	if jwtCfg.Expire != 24*time.Hour {
 		t.Fatalf("expected default jwt expire to be 24h, got %s", jwtCfg.Expire)
@@ -39,12 +37,6 @@ database:
 	}
 	if sessionCfg.CleanupInterval != 5*time.Minute {
 		t.Fatalf("expected default session cleanup interval to be 5m, got %s", sessionCfg.CleanupInterval)
-	}
-	if monitorCfg.Interval != time.Minute {
-		t.Fatalf("expected default monitor interval to be 1m, got %s", monitorCfg.Interval)
-	}
-	if monitorCfg.RetentionMultiplier != 5 {
-		t.Fatalf("expected default retention multiplier to be 5, got %d", monitorCfg.RetentionMultiplier)
 	}
 	staticUploadCfg := svc.(*serviceImpl).getStaticUploadConfig(ctx)
 	if staticUploadCfg.MaxSize != 100 {
@@ -121,25 +113,6 @@ session:
 	}
 }
 
-// TestGetMonitorUsesDurationConfigAndRetentionMultiplier verifies monitor
-// interval parsing and retention multiplier loading.
-func TestGetMonitorUsesDurationConfigAndRetentionMultiplier(t *testing.T) {
-	setTestConfigContent(t, `
-monitor:
-  interval: 45s
-  retentionMultiplier: 8
-`)
-
-	cfg := New().GetMonitor(context.Background())
-
-	if cfg.Interval != 45*time.Second {
-		t.Fatalf("expected monitor interval to be 45s, got %s", cfg.Interval)
-	}
-	if cfg.RetentionMultiplier != 8 {
-		t.Fatalf("expected retention multiplier to be 8, got %d", cfg.RetentionMultiplier)
-	}
-}
-
 // TestGetUploadPathUsesStaticConfig verifies static upload settings remain
 // available when runtime overrides are absent.
 func TestGetUploadPathUsesStaticConfig(t *testing.T) {
@@ -193,22 +166,6 @@ session:
 	}
 	if cfg == nil {
 		t.Fatal("expected session config")
-	}
-}
-
-// TestGetMonitorRejectsSubSecondInterval verifies monitor intervals shorter
-// than one second are rejected.
-func TestGetMonitorRejectsSubSecondInterval(t *testing.T) {
-	setTestConfigContent(t, `
-monitor:
-  interval: 500ms
-`)
-
-	defer assertConfigPanicContains(t, "at least 1s")
-
-	cfg := New().GetMonitor(context.Background())
-	if cfg == nil {
-		t.Fatal("expected monitor config")
 	}
 }
 

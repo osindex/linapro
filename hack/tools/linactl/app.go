@@ -28,6 +28,7 @@ func newApp(stdout io.Writer, stderr io.Writer, stdin io.Reader) *app {
 		stdin:        stdin,
 		env:          os.Environ(),
 		execCommand:  exec.CommandContext,
+		executable:   os.Executable,
 		lookPath:     exec.LookPath,
 		portInUse:    devservice.IsTCPListening,
 		processAlive: process.Alive,
@@ -68,6 +69,9 @@ func (a *app) run(ctx context.Context, args []string) error {
 		if len(args) > 1 {
 			name = normalizeCommandName(args[1])
 			if spec, ok := commandRegistry()[name]; ok {
+				if spec.Hidden {
+					return fmt.Errorf("unknown command %q", args[1])
+				}
 				printCommandHelp(a.stdout, spec)
 				return nil
 			}
@@ -89,6 +93,9 @@ func (a *app) run(ctx context.Context, args []string) error {
 		return err
 	}
 	if input.HasBool("help") || input.HasBool("h") {
+		if spec.Hidden {
+			return fmt.Errorf("unknown command %q; run linactl help", args[0])
+		}
 		printCommandHelp(a.stdout, spec)
 		return errHelpRequested
 	}

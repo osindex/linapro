@@ -9,8 +9,8 @@ import (
 
 	"lina-core/internal/service/plugin/internal/catalog"
 	"lina-core/internal/service/plugin/internal/wasm"
-	bridgecodec "lina-core/pkg/pluginbridge/codec"
-	bridgecontract "lina-core/pkg/pluginbridge/contract"
+	bridgecontract "lina-core/pkg/plugin/pluginbridge/contract"
+	bridgecodec "lina-core/pkg/plugin/pluginbridge/protocol"
 )
 
 // dynamicRouteExecutor executes one encoded bridge request against one active runtime.
@@ -57,15 +57,17 @@ func (e *dynamicWasmExecutor) Execute(
 		routePath = request.Route.RoutePath
 	}
 	return wasm.ExecuteBridge(ctx, wasm.ExecutionInput{
-		PluginID:        manifest.ID,
-		ArtifactPath:    manifest.RuntimeArtifact.Path,
-		BridgeSpec:      manifest.BridgeSpec,
-		Capabilities:    manifest.HostCapabilities,
-		HostServices:    manifest.HostServices,
-		ExecutionSource: bridgecontract.ExecutionSourceRoute,
-		RoutePath:       routePath,
-		RequestID:       request.RequestID,
-		Identity:        request.Identity,
+		PluginID:                  manifest.ID,
+		ArtifactPath:              manifest.RuntimeArtifact.Path,
+		BridgeSpec:                manifest.BridgeSpec,
+		Capabilities:              manifest.HostCapabilities,
+		HostServices:              manifest.HostServices,
+		ArtifactDefaultConfig:     buildArtifactDefaultConfig(manifest),
+		ArtifactManifestResources: buildArtifactManifestResources(manifest),
+		ExecutionSource:           bridgecontract.ExecutionSourceRoute,
+		RoutePath:                 routePath,
+		RequestID:                 request.RequestID,
+		Identity:                  request.Identity,
 	}, requestContent)
 }
 

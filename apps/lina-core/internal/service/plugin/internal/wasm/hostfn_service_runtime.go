@@ -11,8 +11,8 @@ import (
 	"github.com/gogf/gf/v2/os/gtime"
 	"github.com/gogf/gf/v2/util/guid"
 
-	bridgehostcall "lina-core/pkg/pluginbridge/hostcall"
-	bridgehostservice "lina-core/pkg/pluginbridge/hostservice"
+	bridgehostcall "lina-core/pkg/plugin/pluginbridge/protocol"
+	bridgehostservice "lina-core/pkg/plugin/pluginbridge/protocol"
 )
 
 // dispatchRuntimeHostService routes runtime host service methods to log, state,

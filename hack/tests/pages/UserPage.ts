@@ -9,6 +9,10 @@ import {
   waitForTableReady,
 } from "../support/ui";
 
+function escapeRegExp(value: string) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
 export class UserPage {
   constructor(private page: Page) {}
 
@@ -73,9 +77,13 @@ export class UserPage {
    * need business data should always work with the primary data row first.
    */
   private getUserDataRow(username: string) {
+    const exactUsername = new RegExp(`^\\s*${escapeRegExp(username)}\\s*$`);
     return this.page
-      .locator(".vxe-table--main-wrapper .vxe-body--row:visible", {
-        hasText: username,
+      .locator(".vxe-table--main-wrapper .vxe-body--row:visible")
+      .filter({
+        has: this.page.locator(".vxe-cell--label span", {
+          hasText: exactUsername,
+        }),
       })
       .first();
   }

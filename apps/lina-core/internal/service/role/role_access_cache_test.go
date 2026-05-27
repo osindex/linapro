@@ -151,11 +151,6 @@ func (f *fakeRoleConfigService) GetMetadata(_ context.Context) *hostconfig.Metad
 	return &hostconfig.MetadataConfig{}
 }
 
-// GetMonitor returns an empty monitor config for tests.
-func (f *fakeRoleConfigService) GetMonitor(_ context.Context) *hostconfig.MonitorConfig {
-	return &hostconfig.MonitorConfig{}
-}
-
 // GetHealth returns an empty health config for tests.
 func (f *fakeRoleConfigService) GetHealth(_ context.Context) *hostconfig.HealthConfig {
 	return &hostconfig.HealthConfig{}

@@ -1,9 +1,11 @@
-// This file binds host API routes and source-plugin HTTP routes.
+// This file binds host API routes, source-plugin HTTP routes, and the route
+// startup completion hooks that warm plugin frontend assets.
 
 package cmd
 
 import (
 	"context"
+	"time"
 
 	"github.com/gogf/gf/v2/net/ghttp"
 
@@ -29,6 +31,13 @@ import (
 	"lina-core/pkg/logger"
 )
 
+// pluginRuntimeFrontendBundlePrewarmer is the route-startup contract for
+// rebuilding dynamic plugin frontend bundles before the reconciler starts.
+type pluginRuntimeFrontendBundlePrewarmer interface {
+	// PrewarmRuntimeFrontendBundles rebuilds enabled dynamic plugin frontend bundles and returns aggregated preload errors.
+	PrewarmRuntimeFrontendBundles(ctx context.Context) error
+}
+
 // bindHostAPIRoutes registers host control-plane APIs and root-level dynamic
 // plugin data-plane routes with their respective middleware chains.
 func bindHostAPIRoutes(_ context.Context, server *ghttp.Server, runtime *httpRuntime) {
@@ -43,7 +52,7 @@ func bindHostAPIRoutes(_ context.Context, server *ghttp.Server, runtime *httpRun
 		publicCfgCtrl  = publicconfigctrl.NewV1(runtime.configSvc, runtime.i18nSvc)
 		menuCtrl       = menu.NewV1(runtime.menuSvc, runtime.roleSvc, runtime.bizCtxSvc)
 		roleCtrl       = role.NewV1(runtime.roleSvc)
-		userCtrl       = user.NewV1(runtime.userSvc, runtime.roleSvc, runtime.menuSvc, runtime.orgCapSvc, runtime.i18nSvc)
+		userCtrl       = user.NewV1(runtime.userSvc, runtime.roleSvc, runtime.menuSvc, runtime.orgProjection, runtime.i18nSvc)
 		userMsgCtrl    = usermsg.NewV1(runtime.userMsgSvc)
 		jobCtrl        = jobctrl.NewV1(runtime.jobMgmtSvc)
 		jobGroupCtrl   = jobgroupctrl.NewV1(runtime.jobMgmtSvc)
@@ -195,8 +204,29 @@ func completeSourcePluginHTTPRoutes(
 	backgroundCtx context.Context,
 	runtime *httpRuntime,
 ) {
-	if err := runtime.pluginSvc.PrewarmRuntimeFrontendBundles(ctx); err != nil {
-		logger.Warningf(ctx, "prewarm runtime frontend bundles failed: %v", err)
-	}
+	prewarmHTTPRuntimeFrontendBundles(ctx, runtime.pluginSvc)
 	runtime.pluginSvc.StartRuntimeReconciler(backgroundCtx)
+}
+
+// prewarmHTTPRuntimeFrontendBundles warms dynamic frontend assets and reports
+// elapsed time at debug level for startup observability.
+func prewarmHTTPRuntimeFrontendBundles(ctx context.Context, pluginSvc pluginRuntimeFrontendBundlePrewarmer) {
+	if pluginSvc == nil {
+		return
+	}
+	startedAt := time.Now()
+	if err := pluginSvc.PrewarmRuntimeFrontendBundles(ctx); err != nil {
+		logger.Debugf(
+			ctx,
+			"prewarm runtime frontend bundles finished status=failed duration=%s",
+			time.Since(startedAt).Round(time.Millisecond),
+		)
+		logger.Warningf(ctx, "prewarm runtime frontend bundles failed: %v", err)
+		return
+	}
+	logger.Debugf(
+		ctx,
+		"prewarm runtime frontend bundles finished status=succeeded duration=%s",
+		time.Since(startedAt).Round(time.Millisecond),
+	)
 }

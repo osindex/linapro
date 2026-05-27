@@ -23,8 +23,8 @@ import (
 	"lina-core/internal/service/plugin/internal/runtime"
 	"lina-core/internal/service/plugin/internal/testutil"
 	"lina-core/pkg/bizerr"
-	"lina-core/pkg/pluginbridge"
-	"lina-core/pkg/pluginhost"
+	"lina-core/pkg/plugin/pluginbridge/protocol"
+	"lina-core/pkg/plugin/pluginhost"
 )
 
 // TestValidatePluginManifestAcceptsMinimalSourcePlugin verifies that the
@@ -200,7 +200,7 @@ func TestValidatePluginIDEnforcesOnlyRuntimeSafetyBoundary(t *testing.T) {
 }
 
 // TestValidatePluginManifestNormalizesDependencyDefaults verifies dependency
-// declarations are accepted and receive deterministic defaults.
+// declarations keep only plugin ID and optional version range.
 func TestValidatePluginManifestNormalizesDependencyDefaults(t *testing.T) {
 	svcs := testutil.NewServices()
 	pluginDir := testutil.CreateTestPluginDir(t, "acme-demo-dependency-valid")
@@ -219,10 +219,8 @@ func TestValidatePluginManifestNormalizesDependencyDefaults(t *testing.T) {
 					Version: " >=0.1.0 ",
 				},
 				{
-					ID:       "linapro-org-core",
-					Version:  ">=0.1.0",
-					Required: boolPtr(false),
-					Install:  " auto ",
+					ID:      "linapro-org-core",
+					Version: ">=0.1.0",
 				},
 			},
 		},
@@ -238,14 +236,8 @@ func TestValidatePluginManifestNormalizesDependencyDefaults(t *testing.T) {
 	if firstDependency.ID != "linapro-tenant-core" {
 		t.Fatalf("expected dependency ID to be trimmed, got %q", firstDependency.ID)
 	}
-	if firstDependency.Required == nil || !*firstDependency.Required {
-		t.Fatalf("expected required default true, got %#v", firstDependency.Required)
-	}
-	if firstDependency.Install != catalog.DependencyInstallModeManual.String() {
-		t.Fatalf("expected install default manual, got %q", firstDependency.Install)
-	}
-	if manifest.Dependencies.Plugins[1].Install != catalog.DependencyInstallModeAuto.String() {
-		t.Fatalf("expected explicit auto install mode, got %q", manifest.Dependencies.Plugins[1].Install)
+	if firstDependency.Version != ">=0.1.0" {
+		t.Fatalf("expected dependency version to be trimmed, got %q", firstDependency.Version)
 	}
 }
 
@@ -289,25 +281,11 @@ func TestValidatePluginManifestRejectsInvalidDependencies(t *testing.T) {
 			want: "duplicate",
 		},
 		{
-			name: "legacy shaped dependency id is allowed",
-			dependencies: &catalog.DependencySpec{
-				Plugins: []*catalog.PluginDependencySpec{{ID: "plugin-demo-source"}},
-			},
-			want: "",
-		},
-		{
 			name: "invalid dependency version range",
 			dependencies: &catalog.DependencySpec{
 				Plugins: []*catalog.PluginDependencySpec{{ID: "linapro-tenant-core", Version: ">= v0.1.0"}},
 			},
 			want: "version",
-		},
-		{
-			name: "invalid install mode",
-			dependencies: &catalog.DependencySpec{
-				Plugins: []*catalog.PluginDependencySpec{{ID: "linapro-tenant-core", Install: "sometimes"}},
-			},
-			want: "manual/auto",
 		},
 		{
 			name: "invalid framework version range",
@@ -339,6 +317,42 @@ func TestValidatePluginManifestRejectsInvalidDependencies(t *testing.T) {
 			}
 			if err == nil || !strings.Contains(err.Error(), tt.want) {
 				t.Fatalf("expected dependency validation error containing %q, got %v", tt.want, err)
+			}
+		})
+	}
+}
+
+// TestLoadManifestFromYAMLRejectsUnsupportedDependencyPolicyFields verifies
+// unsupported plugin dependency policy fields are rejected before lenient YAML
+// decoding can discard them.
+func TestLoadManifestFromYAMLRejectsUnsupportedDependencyPolicyFields(t *testing.T) {
+	tests := []struct {
+		name    string
+		content string
+		want    string
+	}{
+		{
+			name:    "plugin dependency required",
+			content: "id: acme-demo-dependency-policy\nname: Demo\nversion: 0.1.0\ntype: source\ndependencies:\n  plugins:\n    - id: linapro-tenant-core\n      required: true\n",
+			want:    "dependencies.plugins[0].required",
+		},
+		{
+			name:    "plugin dependency install",
+			content: "id: acme-demo-dependency-policy\nname: Demo\nversion: 0.1.0\ntype: source\ndependencies:\n  plugins:\n    - id: linapro-tenant-core\n      install: auto\n",
+			want:    "dependencies.plugins[0].install",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			manifestPath := filepath.Join(t.TempDir(), "plugin.yaml")
+			if err := os.WriteFile(manifestPath, []byte(tt.content), 0o644); err != nil {
+				t.Fatalf("write manifest fixture failed: %v", err)
+			}
+
+			err := testutil.NewServices().Catalog.LoadManifestFromYAML(manifestPath, &catalog.Manifest{})
+			if err == nil || !strings.Contains(err.Error(), tt.want) {
+				t.Fatalf("expected unsupported field error containing %q, got %v", tt.want, err)
 			}
 		})
 	}
@@ -480,11 +494,11 @@ func TestValidatePluginManifestAcceptsRuntimePluginWithEmbeddedWasmMetadata(t *t
 	if manifest.RuntimeArtifact == nil {
 		t.Fatalf("expected dynamic artifact metadata to be loaded")
 	}
-	if manifest.RuntimeArtifact.RuntimeKind != pluginbridge.RuntimeKindWasm {
+	if manifest.RuntimeArtifact.RuntimeKind != protocol.RuntimeKindWasm {
 		t.Fatalf("expected runtime kind wasm, got %s", manifest.RuntimeArtifact.RuntimeKind)
 	}
-	if manifest.RuntimeArtifact.ABIVersion != pluginbridge.SupportedABIVersion {
-		t.Fatalf("expected ABI version %s, got %s", pluginbridge.SupportedABIVersion, manifest.RuntimeArtifact.ABIVersion)
+	if manifest.RuntimeArtifact.ABIVersion != protocol.SupportedABIVersion {
+		t.Fatalf("expected ABI version %s, got %s", protocol.SupportedABIVersion, manifest.RuntimeArtifact.ABIVersion)
 	}
 	if !manifest.SupportsTenantGovernance() {
 		t.Fatalf("expected dynamic manifest to keep supports_multi_tenant=true")
@@ -709,8 +723,8 @@ func TestValidatePluginManifestRejectsMismatchedRuntimeWasmManifest(t *testing.T
 			Type:    catalog.TypeDynamic.String(),
 		},
 		&catalog.ArtifactSpec{
-			RuntimeKind:   pluginbridge.RuntimeKindWasm,
-			ABIVersion:    pluginbridge.SupportedABIVersion,
+			RuntimeKind:   protocol.RuntimeKindWasm,
+			ABIVersion:    protocol.SupportedABIVersion,
 			SQLAssetCount: 1,
 		},
 		nil,
@@ -798,8 +812,8 @@ func TestStoreUploadedRuntimePackageWritesCanonicalWasmIntoRuntimeStorage(t *tes
 			Type:    catalog.TypeDynamic.String(),
 		},
 		&catalog.ArtifactSpec{
-			RuntimeKind:        pluginbridge.RuntimeKindWasm,
-			ABIVersion:         pluginbridge.SupportedABIVersion,
+			RuntimeKind:        protocol.RuntimeKindWasm,
+			ABIVersion:         protocol.SupportedABIVersion,
 			FrontendAssetCount: len(testutil.DefaultTestRuntimeFrontendAssets()),
 		},
 		testutil.DefaultTestRuntimeFrontendAssets(),
@@ -1276,7 +1290,7 @@ func TestGetRegistryReleaseFallsBackWhenReleasePointerIsDangling(t *testing.T) {
 		PluginId:       pluginID,
 		ReleaseVersion: version,
 		Type:           catalog.TypeDynamic.String(),
-		RuntimeKind:    pluginbridge.RuntimeKindWasm,
+		RuntimeKind:    protocol.RuntimeKindWasm,
 		Status:         catalog.ReleaseStatusActive.String(),
 		ManifestPath:   "runtime/acme-demo-dangling-release-pointer/plugin.yaml",
 		PackagePath:    "runtime/acme-demo-dangling-release-pointer.wasm",
@@ -1389,6 +1403,86 @@ func TestStartupDataSnapshotReusesReleaseByIDAndVersion(t *testing.T) {
 	}
 	if refreshedByVersion == nil || refreshedByVersion.Checksum != refreshedChecksum {
 		t.Fatalf("expected version index to use refreshed release checksum %s, got %#v", refreshedChecksum, refreshedByVersion)
+	}
+}
+
+// TestSyncManifestMigratesLegacyHostRuntimeSnapshot verifies startup manifest
+// synchronization can repair the old persisted hostruntime name while keeping
+// strict validation for fresh manifests and WASM artifacts.
+func TestSyncManifestMigratesLegacyHostRuntimeSnapshot(t *testing.T) {
+	var (
+		ctx      = context.Background()
+		svcs     = testutil.NewServices()
+		pluginID = "acme-demo-legacy-host-config-snapshot"
+		version  = "v0.1.0"
+	)
+
+	testutil.CleanupPluginGovernanceRowsHard(t, ctx, pluginID)
+	t.Cleanup(func() {
+		testutil.CleanupPluginGovernanceRowsHard(t, ctx, pluginID)
+	})
+
+	manifest := &catalog.Manifest{
+		ID:                 pluginID,
+		Name:               "Legacy HostRuntime Snapshot",
+		Version:            version,
+		Type:               catalog.TypeDynamic.String(),
+		ScopeNature:        catalog.ScopeNatureTenantAware.String(),
+		DefaultInstallMode: catalog.InstallModeTenantScoped.String(),
+		HostServices: []*protocol.HostServiceSpec{{
+			Service: protocol.HostServiceHostConfig,
+			Methods: []string{protocol.HostServiceMethodHostConfigGet},
+			Keys:    []string{"workspace.basePath"},
+		}},
+	}
+
+	if _, err := svcs.Catalog.SyncManifest(ctx, manifest); err != nil {
+		t.Fatalf("expected initial manifest sync to succeed, got error: %v", err)
+	}
+	release, err := svcs.Catalog.GetRelease(ctx, pluginID, version)
+	if err != nil {
+		t.Fatalf("expected release lookup to succeed, got error: %v", err)
+	}
+	if release == nil {
+		t.Fatal("expected release row after initial sync")
+	}
+
+	legacySnapshot := strings.ReplaceAll(release.ManifestSnapshot, protocol.HostServiceHostConfig, "hostruntime")
+	if !strings.Contains(legacySnapshot, "hostruntime") {
+		t.Fatalf("expected test fixture to contain legacy hostruntime snapshot, got %s", legacySnapshot)
+	}
+	if _, err = dao.SysPluginRelease.Ctx(ctx).
+		Where(do.SysPluginRelease{Id: release.Id}).
+		Data(do.SysPluginRelease{ManifestSnapshot: legacySnapshot}).
+		Update(); err != nil {
+		t.Fatalf("expected legacy snapshot update to succeed, got error: %v", err)
+	}
+
+	legacyRelease, err := svcs.Catalog.RefreshStartupReleaseByID(ctx, release.Id)
+	if err != nil {
+		t.Fatalf("expected release refresh to succeed, got error: %v", err)
+	}
+	parsedLegacy, err := svcs.Catalog.ParseManifestSnapshot(legacyRelease.ManifestSnapshot)
+	if err != nil {
+		t.Fatalf("expected legacy manifest snapshot to parse through migration, got error: %v", err)
+	}
+	if len(parsedLegacy.RequestedHostServices) != 1 ||
+		parsedLegacy.RequestedHostServices[0].Service != protocol.HostServiceHostConfig {
+		t.Fatalf("expected legacy hostruntime snapshot to normalize to hostconfig, got %#v", parsedLegacy.RequestedHostServices)
+	}
+
+	if _, err = svcs.Catalog.SyncManifest(ctx, manifest); err != nil {
+		t.Fatalf("expected manifest sync to rewrite migrated snapshot, got error: %v", err)
+	}
+	repairedRelease, err := svcs.Catalog.GetRelease(ctx, pluginID, version)
+	if err != nil {
+		t.Fatalf("expected repaired release lookup to succeed, got error: %v", err)
+	}
+	if strings.Contains(repairedRelease.ManifestSnapshot, "hostruntime") {
+		t.Fatalf("expected sync to rewrite legacy hostruntime snapshot, got %s", repairedRelease.ManifestSnapshot)
+	}
+	if !strings.Contains(repairedRelease.ManifestSnapshot, protocol.HostServiceHostConfig) {
+		t.Fatalf("expected repaired snapshot to contain hostconfig, got %s", repairedRelease.ManifestSnapshot)
 	}
 }
 
@@ -1761,9 +1855,4 @@ func TestValidateManifestForcesGlobalWhenTenantGovernanceUnsupported(t *testing.
 	if manifest.SupportsTenantGovernance() {
 		t.Fatalf("expected explicit supports_multi_tenant=false to disable tenant governance")
 	}
-}
-
-// boolPtr returns a pointer to value for concise manifest fixtures.
-func boolPtr(value bool) *bool {
-	return &value
 }

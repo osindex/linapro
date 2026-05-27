@@ -5,7 +5,9 @@ import { test, expect } from "../../../fixtures/auth";
 import { MainLayout } from "../../../pages/MainLayout";
 import { config, workspacePath } from "../../../fixtures/config";
 import { waitForRouteReady } from "../../../support/ui";
-import { getMenuIdsByPermsWithAncestors } from "../../../support/api/job";
+import {
+  getMenuIdsByPermsWithAncestors,
+} from "../../../support/api/job";
 
 const apiBaseURL = config.apiBaseURL;
 
@@ -61,6 +63,10 @@ function getVisibleChildTitles(node: RouteNode | null): string[] {
     .filter((item) => !item.meta?.hideInMenu)
     .map((item) => item.meta?.title ?? "")
     .filter(Boolean);
+}
+
+function expectStartsWith(actual: string[], expectedPrefix: string[]) {
+  expect(actual.slice(0, expectedPrefix.length)).toEqual(expectedPrefix);
 }
 
 function getVisibleRootTitles(list: RouteNode[]): string[] {
@@ -260,7 +266,7 @@ test.describe("TC002 登录后菜单显示", () => {
 
     const extensionRoute = findRouteNodeByTitle(currentUserRoutes, "扩展中心");
     const visibleExtensionChildren = getVisibleChildTitles(extensionRoute);
-    expect(visibleExtensionChildren).toEqual(["插件管理"]);
+    expectStartsWith(visibleExtensionChildren, ["插件管理"]);
 
     const developerRoute = findRouteNodeByTitle(currentUserRoutes, "开发中心");
     const visibleDeveloperChildren = getVisibleChildTitles(developerRoute);

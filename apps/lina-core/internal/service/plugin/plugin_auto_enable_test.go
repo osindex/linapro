@@ -4,24 +4,24 @@ package plugin
 
 import (
 	"context"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
-	"github.com/gogf/gf/v2/database/gdb"
 	"github.com/gogf/gf/v2/frame/g"
-	"github.com/gogf/gf/v2/net/ghttp"
 
+	"lina-core/internal/dao"
+	"lina-core/internal/model/do"
 	configsvc "lina-core/internal/service/config"
 	"lina-core/internal/service/datascope"
 	"lina-core/internal/service/plugin/internal/catalog"
 	runtimepkg "lina-core/internal/service/plugin/internal/runtime"
 	"lina-core/internal/service/plugin/internal/testutil"
-	tenantcapsvc "lina-core/internal/service/tenantcap"
-	"lina-core/pkg/pluginbridge"
-	pkgtenantcap "lina-core/pkg/tenantcap"
+	"lina-core/pkg/plugin/capability/tenantcap"
+	"lina-core/pkg/plugin/pluginbridge/protocol"
 )
 
 // TestBootstrapAutoEnableInstallsAndEnablesSourcePlugin verifies startup
@@ -157,16 +157,16 @@ func TestBootstrapAutoEnableReusesDynamicAuthorizationSnapshot(t *testing.T) {
 			Type:    catalog.TypeDynamic.String(),
 		},
 		&catalog.ArtifactSpec{
-			RuntimeKind: pluginbridge.RuntimeKindWasm,
-			ABIVersion:  pluginbridge.SupportedABIVersion,
-			HostServices: []*pluginbridge.HostServiceSpec{
+			RuntimeKind: protocol.RuntimeKindWasm,
+			ABIVersion:  protocol.SupportedABIVersion,
+			HostServices: []*protocol.HostServiceSpec{
 				{
-					Service: pluginbridge.HostServiceRuntime,
-					Methods: []string{pluginbridge.HostServiceMethodRuntimeInfoNow},
+					Service: protocol.HostServiceRuntime,
+					Methods: []string{protocol.HostServiceMethodRuntimeInfoNow},
 				},
 				{
-					Service: pluginbridge.HostServiceStorage,
-					Methods: []string{pluginbridge.HostServiceMethodStorageGet},
+					Service: protocol.HostServiceStorage,
+					Methods: []string{protocol.HostServiceMethodStorageGet},
 					Paths:   []string{"private-files/"},
 				},
 			},
@@ -182,7 +182,7 @@ func TestBootstrapAutoEnableReusesDynamicAuthorizationSnapshot(t *testing.T) {
 	authorization := &HostServiceAuthorizationInput{
 		Services: []*HostServiceAuthorizationDecision{
 			{
-				Service: pluginbridge.HostServiceStorage,
+				Service: protocol.HostServiceStorage,
 				Paths:   []string{"private-files/"},
 			},
 		},
@@ -265,13 +265,13 @@ func TestBootstrapAutoEnableRejectsDynamicPluginWithoutAuthorizationSnapshot(t *
 			Type:    catalog.TypeDynamic.String(),
 		},
 		&catalog.ArtifactSpec{
-			RuntimeKind: pluginbridge.RuntimeKindWasm,
-			ABIVersion:  pluginbridge.SupportedABIVersion,
-			HostServices: []*pluginbridge.HostServiceSpec{
+			RuntimeKind: protocol.RuntimeKindWasm,
+			ABIVersion:  protocol.SupportedABIVersion,
+			HostServices: []*protocol.HostServiceSpec{
 				{
-					Service: pluginbridge.HostServiceNetwork,
-					Methods: []string{pluginbridge.HostServiceMethodNetworkRequest},
-					Resources: []*pluginbridge.HostServiceResourceSpec{
+					Service: protocol.HostServiceNetwork,
+					Methods: []string{protocol.HostServiceMethodNetworkRequest},
+					Resources: []*protocol.HostServiceResourceSpec{
 						{Ref: "https://example.com/api"},
 					},
 				},
@@ -504,7 +504,7 @@ func TestReconcileAutoEnabledTenantPluginsProvisionsTenantScopedEntries(t *testi
 		service  = newTestService()
 		pluginID = autoEnableTenantProvisioningPluginID
 		version  = "v0.1.0"
-		tenantID = pkgtenantcap.TenantID(50101)
+		tenantID = tenantcap.TenantID(50101)
 	)
 
 	pluginDir := testutil.CreateTestPluginDir(t, pluginID)
@@ -539,7 +539,7 @@ func TestReconcileAutoEnabledTenantPluginsProvisionsTenantScopedEntries(t *testi
 	}
 
 	tenantSvc := &autoEnableTenantProvisioningService{enabled: true, pluginSvc: service, tenantID: tenantID}
-	service.SetTenantCapability(tenantSvc)
+	service.SetTenantProvisioningCapability(tenantSvc)
 	if err = service.ReconcileAutoEnabledTenantPlugins(ctx); err != nil {
 		t.Fatalf("expected tenant provisioning reconciliation to succeed, got error: %v", err)
 	}
@@ -559,6 +559,217 @@ func TestReconcileAutoEnabledTenantPluginsProvisionsTenantScopedEntries(t *testi
 	}
 }
 
+// TestBootstrapAutoEnableRefreshesLegacyHostRuntimeArchive verifies startup
+// runs a single-node dynamic reconciliation pass after manifest sync so stale
+// archived artifacts with obsolete hostruntime declarations are repaired from
+// the current staged artifact.
+func TestBootstrapAutoEnableRefreshesLegacyHostRuntimeArchive(t *testing.T) {
+	var (
+		ctx      = context.Background()
+		service  = newTestService()
+		pluginID = "plugin-dev-dynamic-legacy-host-config-startup"
+		name     = "Legacy HostRuntime Startup Plugin"
+		version  = "v0.1.0"
+	)
+
+	artifactPath := filepath.Join(testutil.TestDynamicStorageDir(), runtimepkg.BuildArtifactFileName(pluginID))
+	testutil.WriteRuntimeWasmArtifact(
+		t,
+		artifactPath,
+		&catalog.ArtifactManifest{
+			ID:      pluginID,
+			Name:    name,
+			Version: version,
+			Type:    catalog.TypeDynamic.String(),
+		},
+		&catalog.ArtifactSpec{
+			RuntimeKind: protocol.RuntimeKindWasm,
+			ABIVersion:  protocol.SupportedABIVersion,
+			HostServices: []*protocol.HostServiceSpec{{
+				Service: protocol.HostServiceHostConfig,
+				Methods: []string{protocol.HostServiceMethodHostConfigGet},
+				Keys:    []string{"workspace.basePath"},
+			}},
+		},
+		nil,
+		nil,
+		nil,
+		nil,
+		nil,
+		nil,
+	)
+
+	testutil.CleanupPluginGovernanceRowsHard(t, ctx, pluginID)
+	t.Cleanup(func() {
+		configsvc.SetPluginAutoEnableOverride(nil)
+		testutil.CleanupPluginGovernanceRowsHard(t, ctx, pluginID)
+		if cleanupErr := os.Remove(artifactPath); cleanupErr != nil && !os.IsNotExist(cleanupErr) {
+			t.Fatalf("failed to remove artifact %s: %v", artifactPath, cleanupErr)
+		}
+	})
+
+	authorization := &HostServiceAuthorizationInput{
+		Services: []*HostServiceAuthorizationDecision{{
+			Service: protocol.HostServiceHostConfig,
+			Methods: []string{protocol.HostServiceMethodHostConfigGet},
+			Keys:    []string{"workspace.basePath"},
+		}},
+	}
+	if _, err := service.Install(ctx, pluginID, InstallOptions{Authorization: authorization}); err != nil {
+		t.Fatalf("expected initial install to succeed, got error: %v", err)
+	}
+	if err := service.UpdateStatus(ctx, pluginID, catalog.StatusEnabled, authorization); err != nil {
+		t.Fatalf("expected initial enable to succeed, got error: %v", err)
+	}
+
+	release, err := service.getPluginRelease(ctx, pluginID, version)
+	if err != nil {
+		t.Fatalf("expected release lookup to succeed, got error: %v", err)
+	}
+	if release == nil {
+		t.Fatal("expected release row after enable")
+	}
+	legacyArchivePath := filepath.Join(
+		testutil.TestDynamicStorageDir(),
+		"releases",
+		pluginID,
+		version,
+		"legacy-hostruntime",
+		runtimepkg.BuildArtifactFileName(pluginID),
+	)
+	writeLegacyHostRuntimeArtifact(t, legacyArchivePath, pluginID, name, version)
+	legacySnapshot := strings.ReplaceAll(release.ManifestSnapshot, protocol.HostServiceHostConfig, "hostruntime")
+	if _, err = dao.SysPluginRelease.Ctx(ctx).
+		Where(do.SysPluginRelease{Id: release.Id}).
+		Data(do.SysPluginRelease{
+			PackagePath:      filepath.ToSlash(strings.TrimPrefix(legacyArchivePath, testutil.TestDynamicStorageDir()+string(os.PathSeparator))),
+			ManifestSnapshot: legacySnapshot,
+		}).
+		Update(); err != nil {
+		t.Fatalf("expected release row to accept legacy archive fixture, got error: %v", err)
+	}
+
+	staleRegistry, err := service.catalogSvc.RefreshStartupRegistry(ctx, pluginID)
+	if err != nil {
+		t.Fatalf("expected registry refresh to succeed, got error: %v", err)
+	}
+	if staleRegistry == nil {
+		t.Fatal("expected registry row before startup bootstrap")
+	}
+	if _, err = service.catalogSvc.RefreshStartupReleaseByID(ctx, release.Id); err != nil {
+		t.Fatalf("expected release refresh to succeed, got error: %v", err)
+	}
+	if _, err = service.runtimeSvc.LoadActiveDynamicPluginManifest(ctx, staleRegistry); err == nil {
+		t.Fatal("expected legacy active archive to fail strict artifact parsing before startup repair")
+	}
+
+	configsvc.SetPluginAutoEnableOverride(nil)
+	if err = service.BootstrapAutoEnable(ctx); err != nil {
+		t.Fatalf("expected startup bootstrap to repair legacy dynamic archive, got error: %v", err)
+	}
+
+	repairedRegistry, err := service.getPluginRegistry(ctx, pluginID)
+	if err != nil {
+		t.Fatalf("expected repaired registry lookup to succeed, got error: %v", err)
+	}
+	if repairedRegistry == nil || repairedRegistry.ReleaseId <= 0 {
+		t.Fatalf("expected repaired registry with release id, got %#v", repairedRegistry)
+	}
+	repairedManifest, err := service.runtimeSvc.LoadActiveDynamicPluginManifest(ctx, repairedRegistry)
+	if err != nil {
+		t.Fatalf("expected repaired active manifest to load, got error: %v", err)
+	}
+	if len(repairedManifest.HostServices) != 1 ||
+		repairedManifest.HostServices[0].Service != protocol.HostServiceHostConfig {
+		t.Fatalf("expected repaired active manifest to use hostconfig, got %#v", repairedManifest.HostServices)
+	}
+	repairedRelease, err := service.catalogSvc.GetRelease(ctx, pluginID, version)
+	if err != nil {
+		t.Fatalf("expected repaired release lookup to succeed, got error: %v", err)
+	}
+	if repairedRelease == nil || strings.Contains(repairedRelease.ManifestSnapshot, "hostruntime") {
+		t.Fatalf("expected repaired release snapshot without hostruntime, got %#v", repairedRelease)
+	}
+	if strings.Contains(filepath.ToSlash(repairedRelease.PackagePath), "legacy-hostruntime") {
+		t.Fatalf("expected repaired release package path to point at checksum archive, got %s", repairedRelease.PackagePath)
+	}
+}
+
+// writeLegacyHostRuntimeArtifact writes a strict-invalid runtime artifact that
+// mirrors the historical hostruntime service spelling found in old archives.
+func writeLegacyHostRuntimeArtifact(t *testing.T, filePath string, pluginID string, name string, version string) {
+	t.Helper()
+
+	manifest := &catalog.ArtifactManifest{
+		ID:                  pluginID,
+		Name:                name,
+		Version:             version,
+		Type:                catalog.TypeDynamic.String(),
+		ScopeNature:         catalog.ScopeNatureTenantAware.String(),
+		SupportsMultiTenant: &testutil.DefaultTestSupportsMultiTenant,
+		DefaultInstallMode:  catalog.InstallModeTenantScoped.String(),
+	}
+	runtimeMetadata := &catalog.ArtifactSpec{
+		RuntimeKind: protocol.RuntimeKindWasm,
+		ABIVersion:  protocol.SupportedABIVersion,
+	}
+	manifestContent, err := json.Marshal(manifest)
+	if err != nil {
+		t.Fatalf("failed to marshal legacy artifact manifest: %v", err)
+	}
+	runtimeContent, err := json.Marshal(runtimeMetadata)
+	if err != nil {
+		t.Fatalf("failed to marshal legacy artifact runtime metadata: %v", err)
+	}
+	hostServicesContent := []byte(`[{"service":"hostruntime","methods":["get"],"resources":{"keys":["workspace.basePath"]}}]`)
+
+	wasm := []byte{0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00}
+	wasm = appendTestWasmCustomSection(wasm, protocol.WasmSectionManifest, manifestContent)
+	wasm = appendTestWasmCustomSection(wasm, protocol.WasmSectionRuntime, runtimeContent)
+	wasm = appendTestWasmCustomSection(wasm, protocol.WasmSectionBackendHostServices, hostServicesContent)
+
+	if err = os.MkdirAll(filepath.Dir(filePath), 0o755); err != nil {
+		t.Fatalf("failed to create legacy artifact dir: %v", err)
+	}
+	if err = os.WriteFile(filePath, wasm, 0o644); err != nil {
+		t.Fatalf("failed to write legacy artifact: %v", err)
+	}
+	t.Cleanup(func() {
+		if cleanupErr := os.Remove(filePath); cleanupErr != nil && !os.IsNotExist(cleanupErr) {
+			t.Fatalf("failed to remove legacy artifact %s: %v", filePath, cleanupErr)
+		}
+	})
+}
+
+// appendTestWasmCustomSection appends a WASM custom section for local fixtures.
+func appendTestWasmCustomSection(content []byte, name string, payload []byte) []byte {
+	sectionPayload := append([]byte{}, encodeTestWasmULEB128(uint32(len(name)))...)
+	sectionPayload = append(sectionPayload, []byte(name)...)
+	sectionPayload = append(sectionPayload, payload...)
+
+	out := append([]byte{}, content...)
+	out = append(out, 0x00)
+	out = append(out, encodeTestWasmULEB128(uint32(len(sectionPayload)))...)
+	out = append(out, sectionPayload...)
+	return out
+}
+
+// encodeTestWasmULEB128 encodes one unsigned WASM section length.
+func encodeTestWasmULEB128(value uint32) []byte {
+	out := make([]byte, 0, 5)
+	for {
+		current := byte(value & 0x7f)
+		value >>= 7
+		if value != 0 {
+			current |= 0x80
+		}
+		out = append(out, current)
+		if value == 0 {
+			return out
+		}
+	}
+}
+
 // autoEnableTenantProvisioningPluginID is the fixture plugin owned by the
 // startup tenant provisioning test.
 const autoEnableTenantProvisioningPluginID = "plugin-dev-auto-enable-tenant-provisioning"
@@ -568,105 +779,8 @@ const autoEnableTenantProvisioningPluginID = "plugin-dev-auto-enable-tenant-prov
 type autoEnableTenantProvisioningService struct {
 	enabled        bool
 	pluginSvc      *serviceImpl
-	tenantID       pkgtenantcap.TenantID
+	tenantID       tenantcap.TenantID
 	provisionCalls int
-}
-
-// Enabled returns the configured tenant capability state.
-func (s *autoEnableTenantProvisioningService) Enabled(context.Context) bool {
-	return s.enabled
-}
-
-// Current returns the fake current tenant.
-func (s *autoEnableTenantProvisioningService) Current(context.Context) tenantcapsvc.TenantID {
-	return s.tenantID
-}
-
-// Apply is unused by auto-enable provisioning tests.
-func (s *autoEnableTenantProvisioningService) Apply(
-	_ context.Context,
-	model *gdb.Model,
-	_ string,
-) (*gdb.Model, error) {
-	return model, nil
-}
-
-// PlatformBypass is unused by auto-enable provisioning tests.
-func (s *autoEnableTenantProvisioningService) PlatformBypass(context.Context) bool {
-	return false
-}
-
-// EnsureTenantVisible is unused by auto-enable provisioning tests.
-func (s *autoEnableTenantProvisioningService) EnsureTenantVisible(context.Context, tenantcapsvc.TenantID) error {
-	return nil
-}
-
-// ResolveTenant is unused by auto-enable provisioning tests.
-func (s *autoEnableTenantProvisioningService) ResolveTenant(
-	context.Context,
-	*ghttp.Request,
-) (*pkgtenantcap.ResolverResult, error) {
-	return &pkgtenantcap.ResolverResult{TenantID: s.tenantID, Matched: true}, nil
-}
-
-// ApplyUserTenantScope is unused by auto-enable provisioning tests.
-func (s *autoEnableTenantProvisioningService) ApplyUserTenantScope(
-	_ context.Context,
-	model *gdb.Model,
-	_ string,
-) (*gdb.Model, bool, error) {
-	return model, false, nil
-}
-
-// ListUserTenants is unused by auto-enable provisioning tests.
-func (s *autoEnableTenantProvisioningService) ListUserTenants(context.Context, int) ([]pkgtenantcap.TenantInfo, error) {
-	return nil, nil
-}
-
-// ApplyUserTenantFilter is unused by auto-enable provisioning tests.
-func (s *autoEnableTenantProvisioningService) ApplyUserTenantFilter(
-	_ context.Context,
-	model *gdb.Model,
-	_ string,
-	_ tenantcapsvc.TenantID,
-) (*gdb.Model, bool, error) {
-	return model, false, nil
-}
-
-// ListUserTenantProjections is unused by auto-enable provisioning tests.
-func (s *autoEnableTenantProvisioningService) ListUserTenantProjections(
-	context.Context,
-	[]int,
-) (map[int]*pkgtenantcap.UserTenantProjection, error) {
-	return map[int]*pkgtenantcap.UserTenantProjection{}, nil
-}
-
-// ResolveUserTenantAssignment is unused by auto-enable provisioning tests.
-func (s *autoEnableTenantProvisioningService) ResolveUserTenantAssignment(
-	context.Context,
-	[]pkgtenantcap.TenantID,
-	pkgtenantcap.UserTenantAssignmentMode,
-) (*pkgtenantcap.UserTenantAssignmentPlan, error) {
-	return &pkgtenantcap.UserTenantAssignmentPlan{}, nil
-}
-
-// ReplaceUserTenantAssignments is unused by auto-enable provisioning tests.
-func (s *autoEnableTenantProvisioningService) ReplaceUserTenantAssignments(
-	context.Context,
-	int,
-	*pkgtenantcap.UserTenantAssignmentPlan,
-) error {
-	return nil
-}
-
-// EnsureUsersInTenant is unused by auto-enable provisioning tests.
-func (s *autoEnableTenantProvisioningService) EnsureUsersInTenant(context.Context, []int, tenantcapsvc.TenantID) error {
-	return nil
-}
-
-// ValidateUserMembershipStartupConsistency is unused by auto-enable provisioning tests.
-func (s *autoEnableTenantProvisioningService) ValidateUserMembershipStartupConsistency(context.Context) ([]string, error) {
-	return nil, nil
 }
 
 // ProvisionAutoEnabledTenantPlugins records startup provisioning and writes the

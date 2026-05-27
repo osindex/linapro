@@ -8,9 +8,8 @@ import (
 	"linactl/internal/goframecli"
 )
 
-// runCtrl runs gf gen ctrl in the core application directory.
-func runCtrl(ctx context.Context, a *app, input commandInput) error {
-	return goframecli.Run(ctx, a.root, a.runCommand, func(installCtx context.Context) error {
-		return runCLIInstallIfMissing(installCtx, a, input)
-	}, "gen", "ctrl")
+// runCtrl runs the embedded GoFrame gen ctrl command in the core application
+// directory without requiring an external gf binary.
+func runCtrl(ctx context.Context, a *app, _ commandInput) error {
+	return goframecli.Run(ctx, a.root, a.executable, a.runCommand, "gen", "ctrl")
 }

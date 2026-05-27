@@ -33,8 +33,15 @@ func (s *serviceImpl) SyncSourcePlugins(ctx context.Context) error {
 	if err := s.ensurePlatformGovernance(ctx); err != nil {
 		return err
 	}
-	_, err := s.syncAndList(ctx)
-	return err
+	out, err := s.syncAndList(ctx)
+	if err != nil {
+		return err
+	}
+	if _, err = s.markRuntimeCacheChanged(ctx, "source_plugins_synced"); err != nil {
+		return err
+	}
+	s.managementListCache.store(s.managementListCacheKey(ctx), out)
+	return nil
 }
 
 // SyncSourcePluginsStrict synchronizes source plugins discovered by the
@@ -44,7 +51,15 @@ func (s *serviceImpl) SyncSourcePluginsStrict(ctx context.Context) (*ListOutput,
 	if err := s.ensurePlatformGovernance(ctx); err != nil {
 		return nil, err
 	}
-	return s.syncAndList(ctx)
+	out, err := s.syncAndList(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if _, err = s.markRuntimeCacheChanged(ctx, "source_plugins_synced"); err != nil {
+		return nil, err
+	}
+	s.managementListCache.store(s.managementListCacheKey(ctx), out)
+	return out, nil
 }
 
 // SyncAndList scans plugin manifests, synchronizes plugin registry rows, and
@@ -53,7 +68,15 @@ func (s *serviceImpl) SyncAndList(ctx context.Context) (*ListOutput, error) {
 	if err := s.ensurePlatformGovernance(ctx); err != nil {
 		return nil, err
 	}
-	return s.syncAndList(ctx)
+	out, err := s.syncAndList(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if _, err = s.markRuntimeCacheChanged(ctx, "plugins_synced_and_listed"); err != nil {
+		return nil, err
+	}
+	s.managementListCache.store(s.managementListCacheKey(ctx), out)
+	return out, nil
 }
 
 // syncAndList scans plugin manifests and mutates plugin governance tables for
@@ -70,6 +93,8 @@ func (s *serviceImpl) syncAndList(ctx context.Context) (*ListOutput, error) {
 	if err != nil {
 		return nil, err
 	}
+	syncCtx = withManifestSnapshot(syncCtx, manifests)
+	syncCtx = s.WithDependencySnapshotCache(syncCtx)
 
 	covered := make(map[string]struct{}, len(manifests))
 	items := make([]*PluginItem, 0, len(manifests))
@@ -96,7 +121,7 @@ func (s *serviceImpl) syncAndList(ctx context.Context) (*ListOutput, error) {
 
 // List returns the read-only plugin list with optional in-memory filtering applied.
 func (s *serviceImpl) List(ctx context.Context, in ListInput) (*ListOutput, error) {
-	out, err := s.ReadOnlyList(ctx)
+	out, err := s.managementList(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -128,7 +153,7 @@ func (s *serviceImpl) Get(ctx context.Context, pluginID string) (*PluginItem, er
 	if normalizedPluginID == "" {
 		return nil, bizerr.NewCode(CodePluginNotFound, bizerr.P("pluginId", normalizedPluginID))
 	}
-	out, err := s.ReadOnlyList(ctx)
+	out, err := s.managementList(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -143,6 +168,12 @@ func (s *serviceImpl) Get(ctx context.Context, pluginID string) (*PluginItem, er
 // ReadOnlyList scans plugin manifests and projects current registry state
 // without synchronizing governance tables.
 func (s *serviceImpl) ReadOnlyList(ctx context.Context) (*ListOutput, error) {
+	return s.buildManagementList(ctx)
+}
+
+// buildManagementList scans plugin manifests and projects current registry
+// state without synchronizing governance tables.
+func (s *serviceImpl) buildManagementList(ctx context.Context) (*ListOutput, error) {
 	if err := s.ensureRuntimeCacheFresh(ctx); err != nil {
 		return nil, err
 	}
@@ -157,6 +188,7 @@ func (s *serviceImpl) ReadOnlyList(ctx context.Context) (*ListOutput, error) {
 	if err != nil {
 		return nil, err
 	}
+	readCtx = withManifestSnapshot(readCtx, manifests)
 	readCtx = s.WithDependencySnapshotCache(readCtx)
 	registries, err := s.catalogSvc.ListAllRegistries(readCtx)
 	if err != nil {

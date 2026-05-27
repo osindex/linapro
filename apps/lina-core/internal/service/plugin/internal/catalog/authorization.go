@@ -12,7 +12,7 @@ import (
 
 	"lina-core/internal/dao"
 	"lina-core/internal/model/do"
-	"lina-core/pkg/pluginbridge"
+	"lina-core/pkg/plugin/pluginbridge/protocol"
 )
 
 // HostServiceAuthorizationInput describes the host-confirmed authorization
@@ -35,20 +35,91 @@ type HostServiceAuthorizationDecision struct {
 	ResourceRefs []string
 	// Tables lists the confirmed data tables for this service.
 	Tables []string
+	// Keys lists the confirmed public host config keys for this service.
+	Keys []string
 }
 
 // HasResourceScopedHostServices reports whether any host service declaration
 // requires host confirmation because it contains governed paths, resource refs or tables.
-func HasResourceScopedHostServices(specs []*pluginbridge.HostServiceSpec) bool {
+func HasResourceScopedHostServices(specs []*protocol.HostServiceSpec) bool {
 	for _, spec := range specs {
 		if spec == nil {
 			continue
 		}
-		if len(spec.Paths) > 0 || len(spec.Resources) > 0 || len(spec.Tables) > 0 {
+		if len(spec.Paths) > 0 || len(spec.Resources) > 0 || len(spec.Tables) > 0 || len(spec.Keys) > 0 {
 			return true
 		}
 	}
 	return false
+}
+
+// migrateLegacyManifestSnapshotHostServices normalizes persisted release
+// snapshots that predate the hostConfig service rename. Runtime artifacts and
+// fresh manifests still use the strict pluginbridge validator.
+func migrateLegacyManifestSnapshotHostServices(specs []*protocol.HostServiceSpec) {
+	for _, spec := range specs {
+		if spec == nil {
+			continue
+		}
+		if strings.EqualFold(strings.TrimSpace(spec.Service), "hostruntime") {
+			spec.Service = protocol.HostServiceHostConfig
+		}
+	}
+}
+
+// migrateLegacyManifestSnapshotNode rewrites legacy persisted host-service
+// names before decoding so the current codec can still hydrate resources.keys.
+func migrateLegacyManifestSnapshotNode(node *yaml.Node) {
+	if node == nil {
+		return
+	}
+	root := node
+	if root.Kind == yaml.DocumentNode && len(root.Content) > 0 {
+		root = root.Content[0]
+	}
+	if root == nil || root.Kind != yaml.MappingNode {
+		return
+	}
+	for index := 0; index+1 < len(root.Content); index += 2 {
+		key := root.Content[index]
+		value := root.Content[index+1]
+		if key == nil || value == nil {
+			continue
+		}
+		if key.Value != "requestedHostServices" && key.Value != "authorizedHostServices" {
+			continue
+		}
+		migrateLegacyManifestSnapshotHostServiceSequence(value)
+	}
+}
+
+// migrateLegacyManifestSnapshotHostServiceSequence rewrites one host-service
+// sequence in-place while preserving the original resource envelope node.
+func migrateLegacyManifestSnapshotHostServiceSequence(node *yaml.Node) {
+	if node == nil || node.Kind != yaml.SequenceNode {
+		return
+	}
+	for _, item := range node.Content {
+		migrateLegacyManifestSnapshotHostService(item)
+	}
+}
+
+// migrateLegacyManifestSnapshotHostService rewrites the legacy hostRuntime
+// service identifier on one persisted host-service mapping.
+func migrateLegacyManifestSnapshotHostService(node *yaml.Node) {
+	if node == nil || node.Kind != yaml.MappingNode {
+		return
+	}
+	for index := 0; index+1 < len(node.Content); index += 2 {
+		key := node.Content[index]
+		value := node.Content[index+1]
+		if key == nil || value == nil || key.Value != "service" {
+			continue
+		}
+		if strings.EqualFold(strings.TrimSpace(value.Value), "hostruntime") {
+			value.Value = protocol.HostServiceHostConfig
+		}
+	}
 }
 
 // ParseManifestSnapshot unmarshals one persisted release manifest snapshot.
@@ -58,14 +129,21 @@ func (s *serviceImpl) ParseManifestSnapshot(content string) (*ManifestSnapshot, 
 		return nil, nil
 	}
 	snapshot := &ManifestSnapshot{}
-	if err := yaml.Unmarshal([]byte(trimmed), snapshot); err != nil {
+	root := &yaml.Node{}
+	if err := yaml.Unmarshal([]byte(trimmed), root); err != nil {
 		return nil, gerror.Wrap(err, "parse plugin release manifest_snapshot failed")
 	}
-	requestedHostServices, err := pluginbridge.NormalizeHostServiceSpecs(snapshot.RequestedHostServices)
+	migrateLegacyManifestSnapshotNode(root)
+	if err := root.Decode(snapshot); err != nil {
+		return nil, gerror.Wrap(err, "decode plugin release manifest_snapshot failed")
+	}
+	migrateLegacyManifestSnapshotHostServices(snapshot.RequestedHostServices)
+	migrateLegacyManifestSnapshotHostServices(snapshot.AuthorizedHostServices)
+	requestedHostServices, err := protocol.NormalizeHostServiceSpecs(snapshot.RequestedHostServices)
 	if err != nil {
 		return nil, gerror.Wrap(err, "parse requested plugin host service snapshot failed")
 	}
-	authorizedHostServices, err := pluginbridge.NormalizeHostServiceSpecs(snapshot.AuthorizedHostServices)
+	authorizedHostServices, err := protocol.NormalizeHostServiceSpecs(snapshot.AuthorizedHostServices)
 	if err != nil {
 		return nil, gerror.Wrap(err, "parse authorized plugin host service snapshot failed")
 	}
@@ -104,7 +182,7 @@ func (s *serviceImpl) PersistReleaseHostServiceAuthorization(
 	}
 	if existingSnapshot != nil {
 		snapshot.HostServiceAuthConfirmed = existingSnapshot.HostServiceAuthConfirmed
-		authorizedHostServices, normalizeErr := pluginbridge.NormalizeHostServiceSpecs(existingSnapshot.AuthorizedHostServices)
+		authorizedHostServices, normalizeErr := protocol.NormalizeHostServiceSpecs(existingSnapshot.AuthorizedHostServices)
 		if normalizeErr != nil {
 			return nil, normalizeErr
 		}
@@ -113,7 +191,7 @@ func (s *serviceImpl) PersistReleaseHostServiceAuthorization(
 	}
 
 	if !snapshot.HostServiceAuthRequired {
-		authorizedHostServices, normalizeErr := pluginbridge.NormalizeHostServiceSpecs(snapshot.RequestedHostServices)
+		authorizedHostServices, normalizeErr := protocol.NormalizeHostServiceSpecs(snapshot.RequestedHostServices)
 		if normalizeErr != nil {
 			return nil, normalizeErr
 		}
@@ -148,15 +226,15 @@ func (s *serviceImpl) PersistReleaseHostServiceAuthorization(
 // requested host service declarations and returns the final authorization
 // snapshot used by runtime enforcement.
 func BuildAuthorizedHostServiceSpecs(
-	requested []*pluginbridge.HostServiceSpec,
+	requested []*protocol.HostServiceSpec,
 	input *HostServiceAuthorizationInput,
-) ([]*pluginbridge.HostServiceSpec, error) {
-	requestedSpecs, err := pluginbridge.NormalizeHostServiceSpecs(requested)
+) ([]*protocol.HostServiceSpec, error) {
+	requestedSpecs, err := protocol.NormalizeHostServiceSpecs(requested)
 	if err != nil {
 		return nil, err
 	}
 	if len(requestedSpecs) == 0 {
-		return []*pluginbridge.HostServiceSpec{}, nil
+		return []*protocol.HostServiceSpec{}, nil
 	}
 	if input == nil {
 		return requestedSpecs, nil
@@ -167,9 +245,10 @@ func BuildAuthorizedHostServiceSpecs(
 		paths        map[string]struct{}
 		resourceRefs map[string]struct{}
 		tables       map[string]struct{}
+		keys         map[string]struct{}
 	}
 
-	serviceMap := make(map[string]*pluginbridge.HostServiceSpec, len(requestedSpecs))
+	serviceMap := make(map[string]*protocol.HostServiceSpec, len(requestedSpecs))
 	for _, spec := range requestedSpecs {
 		if spec == nil {
 			continue
@@ -193,6 +272,7 @@ func BuildAuthorizedHostServiceSpecs(
 			paths:        make(map[string]struct{}),
 			resourceRefs: make(map[string]struct{}),
 			tables:       make(map[string]struct{}),
+			keys:         make(map[string]struct{}),
 		}
 		for _, method := range item.Methods {
 			normalizedMethod := strings.TrimSpace(strings.ToLower(method))
@@ -239,18 +319,29 @@ func BuildAuthorizedHostServiceSpecs(
 			}
 			state.tables[normalizedTable] = struct{}{}
 		}
+		keySet := buildHostServiceKeySet(spec.Keys)
+		for _, key := range item.Keys {
+			normalizedKey := strings.TrimSpace(key)
+			if normalizedKey == "" {
+				continue
+			}
+			if _, ok = keySet[normalizedKey]; !ok {
+				return nil, gerror.Newf("host service %s authorization contains undeclared key: %s", service, key)
+			}
+			state.keys[normalizedKey] = struct{}{}
+		}
 		decisionMap[service] = state
 	}
 
-	authorized := make([]*pluginbridge.HostServiceSpec, 0, len(requestedSpecs))
+	authorized := make([]*protocol.HostServiceSpec, 0, len(requestedSpecs))
 	for _, spec := range requestedSpecs {
 		if spec == nil {
 			continue
 		}
 		// Services without governed targets are effectively capability-only and
-		// can be copied through directly. Path/resource/table-scoped services are
+		// can be copied through directly. Path/resource/table/key-scoped services are
 		// included only when the host explicitly keeps some confirmed targets.
-		if len(spec.Paths) == 0 && len(spec.Resources) == 0 && len(spec.Tables) == 0 {
+		if len(spec.Paths) == 0 && len(spec.Resources) == 0 && len(spec.Tables) == 0 && len(spec.Keys) == 0 {
 			authorized = append(authorized, spec)
 			continue
 		}
@@ -273,7 +364,7 @@ func BuildAuthorizedHostServiceSpecs(
 			if len(paths) == 0 {
 				continue
 			}
-			authorized = append(authorized, &pluginbridge.HostServiceSpec{
+			authorized = append(authorized, &protocol.HostServiceSpec{
 				Service: spec.Service,
 				Methods: methods,
 				Paths:   paths,
@@ -286,10 +377,23 @@ func BuildAuthorizedHostServiceSpecs(
 			if len(tables) == 0 {
 				continue
 			}
-			authorized = append(authorized, &pluginbridge.HostServiceSpec{
+			authorized = append(authorized, &protocol.HostServiceSpec{
 				Service: spec.Service,
 				Methods: methods,
 				Tables:  tables,
+			})
+			continue
+		}
+
+		if len(spec.Keys) > 0 {
+			keys := filterKeysBySet(spec.Keys, decision.keys)
+			if len(keys) == 0 {
+				continue
+			}
+			authorized = append(authorized, &protocol.HostServiceSpec{
+				Service: spec.Service,
+				Methods: methods,
+				Keys:    keys,
 			})
 			continue
 		}
@@ -299,13 +403,25 @@ func BuildAuthorizedHostServiceSpecs(
 			continue
 		}
 
-		authorized = append(authorized, &pluginbridge.HostServiceSpec{
+		authorized = append(authorized, &protocol.HostServiceSpec{
 			Service:   spec.Service,
 			Methods:   methods,
 			Resources: resources,
 		})
 	}
-	return pluginbridge.NormalizeHostServiceSpecs(authorized)
+	return protocol.NormalizeHostServiceSpecs(authorized)
+}
+
+// buildHostServiceKeySet normalizes declared key-scoped authorizations into one lookup set.
+func buildHostServiceKeySet(keys []string) map[string]struct{} {
+	set := make(map[string]struct{}, len(keys))
+	for _, key := range keys {
+		normalizedKey := strings.TrimSpace(key)
+		if normalizedKey != "" {
+			set[normalizedKey] = struct{}{}
+		}
+	}
+	return set
 }
 
 // buildHostServicePathSet normalizes declared path-scoped authorizations into
@@ -323,7 +439,7 @@ func buildHostServicePathSet(paths []string) map[string]struct{} {
 
 // buildHostServiceResourceSet normalizes declared resource refs into one
 // lookup set for authorization validation.
-func buildHostServiceResourceSet(resources []*pluginbridge.HostServiceResourceSpec) map[string]struct{} {
+func buildHostServiceResourceSet(resources []*protocol.HostServiceResourceSpec) map[string]struct{} {
 	set := make(map[string]struct{}, len(resources))
 	for _, resource := range resources {
 		if resource == nil {
@@ -367,13 +483,13 @@ func filterMethodsBySet(methods []string, allowed map[string]struct{}) []string 
 // filterResourcesBySet narrows resource refs to the confirmed set while
 // cloning attribute data for the persisted authorization snapshot.
 func filterResourcesBySet(
-	resources []*pluginbridge.HostServiceResourceSpec,
+	resources []*protocol.HostServiceResourceSpec,
 	allowed map[string]struct{},
-) []*pluginbridge.HostServiceResourceSpec {
+) []*protocol.HostServiceResourceSpec {
 	if len(allowed) == 0 {
-		return []*pluginbridge.HostServiceResourceSpec{}
+		return []*protocol.HostServiceResourceSpec{}
 	}
-	filtered := make([]*pluginbridge.HostServiceResourceSpec, 0, len(resources))
+	filtered := make([]*protocol.HostServiceResourceSpec, 0, len(resources))
 	for _, resource := range resources {
 		if resource == nil {
 			continue
@@ -381,7 +497,7 @@ func filterResourcesBySet(
 		if _, ok := allowed[strings.TrimSpace(resource.Ref)]; !ok {
 			continue
 		}
-		filtered = append(filtered, &pluginbridge.HostServiceResourceSpec{
+		filtered = append(filtered, &protocol.HostServiceResourceSpec{
 			Ref:             resource.Ref,
 			AllowMethods:    append([]string(nil), resource.AllowMethods...),
 			HeaderAllowList: append([]string(nil), resource.HeaderAllowList...),
@@ -424,6 +540,20 @@ func filterTablesBySet(tables []string, allowed map[string]struct{}) []string {
 		}
 		if _, ok := allowed[normalizedTable]; ok {
 			filtered = append(filtered, normalizedTable)
+		}
+	}
+	return filtered
+}
+
+// filterKeysBySet narrows one ordered key slice to the confirmed set.
+func filterKeysBySet(keys []string, allowed map[string]struct{}) []string {
+	if len(allowed) == 0 {
+		return []string{}
+	}
+	filtered := make([]string, 0, len(keys))
+	for _, key := range keys {
+		if _, ok := allowed[key]; ok {
+			filtered = append(filtered, key)
 		}
 	}
 	return filtered

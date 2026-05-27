@@ -9,12 +9,11 @@ import (
 	"github.com/golang-jwt/jwt/v5"
 
 	"lina-core/internal/service/kvcache"
-	"lina-core/internal/service/orgcap"
 	pluginsvc "lina-core/internal/service/plugin"
 	"lina-core/internal/service/role"
 	"lina-core/internal/service/session"
-	tenantcapsvc "lina-core/internal/service/tenantcap"
 	"lina-core/pkg/authtoken"
+	tenantcapsvc "lina-core/pkg/plugin/capability/tenantcap"
 )
 
 // Auth status constants used by login validation.
@@ -86,6 +85,15 @@ type TenantTokenIssuer interface {
 	// ReissueTenantTokenFromBearer parses the current bearer token and delegates
 	// to ReissueTenantToken for tenant-switch validation and revocation.
 	ReissueTenantTokenFromBearer(ctx context.Context, tokenString string, tenantID int) (*TenantTokenOutput, error)
+	// IssueImpersonationToken signs a host-owned impersonation access token for
+	// a platform administrator entering target tenant scope. It creates the
+	// online-session row and primes role access using platform administrator
+	// grants while retaining the target tenant as the request data boundary.
+	IssueImpersonationToken(ctx context.Context, in ImpersonationTokenIssueInput) (*ImpersonationTokenOutput, error)
+	// RevokeImpersonationToken validates that tokenString is an impersonation
+	// access token for tenantID when tenantID is non-zero, then revokes the
+	// session and token access cache through the host auth state store.
+	RevokeImpersonationToken(ctx context.Context, tokenString string, tenantID int) error
 }
 
 // Ensure serviceImpl implements Service.
@@ -96,12 +104,12 @@ var _ TenantTokenIssuer = (*serviceImpl)(nil)
 
 // serviceImpl implements Service.
 type serviceImpl struct {
-	configSvc    authConfigService    // Configuration service
-	orgCapSvc    orgcap.Service       // Optional organization capability service
-	pluginSvc    pluginsvc.Service    // Plugin service
-	roleSvc      authRoleService      // Role service
-	tenantSvc    tenantcapsvc.Service // Tenant capability service
-	sessionStore session.Store        // Session store
+	configSvc    authConfigService // Configuration service
+	orgCapSvc    authOrgProjectionService
+	pluginSvc    pluginsvc.Service // Plugin service
+	roleSvc      authRoleService   // Role service
+	tenantSvc    authTenantAccessService
+	sessionStore session.Store // Session store
 	preTokens    preTokenStore
 	revoked      revokeStore
 }
@@ -137,8 +145,31 @@ type authRoleService interface {
 	InvalidateTokenAccessContext(ctx context.Context, tokenID string)
 }
 
+// authOrgProjectionService is the organization read slice used by auth session
+// projection. It deliberately excludes organization assignment and data-scope
+// query builder methods.
+type authOrgProjectionService interface {
+	// GetUserDeptName returns one user's department display name for login and
+	// online-session projection. Missing organization capability should degrade
+	// to an empty name.
+	GetUserDeptName(ctx context.Context, userID int) (string, error)
+}
+
+// authTenantAccessService is the tenant membership slice required by auth. It
+// excludes tenant query-scope, provisioning, and startup consistency methods.
+type authTenantAccessService interface {
+	// Available reports whether tenant membership checks should run.
+	Available(ctx context.Context) bool
+	// ListUserTenants returns active tenant candidates visible to one login user.
+	ListUserTenants(ctx context.Context, userID int) ([]tenantcapsvc.TenantInfo, error)
+	// ValidateUserInTenant verifies that userID may issue a token for tenantID.
+	ValidateUserInTenant(ctx context.Context, userID int, tenantID tenantcapsvc.TenantID) error
+	// SwitchTenant validates a tenant switch before token reissue.
+	SwitchTenant(ctx context.Context, userID int, target tenantcapsvc.TenantID) error
+}
+
 // New creates the concrete auth service from explicit runtime-owned dependencies.
-func New(configSvc authConfigService, pluginSvc pluginsvc.Service, orgCapSvc orgcap.Service, roleSvc authRoleService, tenantSvc tenantcapsvc.Service, sessionStore session.Store, kvCacheSvc kvcache.Service) Service {
+func New(configSvc authConfigService, pluginSvc pluginsvc.Service, orgCapSvc authOrgProjectionService, roleSvc authRoleService, tenantSvc authTenantAccessService, sessionStore session.Store, kvCacheSvc kvcache.Service) Service {
 	return &serviceImpl{
 		configSvc:    configSvc,
 		orgCapSvc:    orgCapSvc,
@@ -213,4 +244,18 @@ type TenantTokenReissueInput struct {
 type TenantTokenOutput struct {
 	AccessToken  string // JWT access token
 	RefreshToken string // JWT refresh token
+}
+
+// ImpersonationTokenIssueInput defines host-owned impersonation token issue fields.
+type ImpersonationTokenIssueInput struct {
+	ActingUserID int // Platform administrator user ID
+	TenantID     int // Target tenant ID
+}
+
+// ImpersonationTokenOutput defines a host-owned impersonation token response.
+type ImpersonationTokenOutput struct {
+	AccessToken  string // JWT access token
+	TokenID      string // Host token/session identifier
+	TenantID     int    // Target tenant ID
+	ActingUserID int    // Platform administrator user ID
 }

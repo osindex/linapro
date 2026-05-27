@@ -14,8 +14,8 @@ import (
 
 	"lina-core/internal/service/plugin/internal/catalog"
 	"lina-core/internal/service/plugin/internal/wasm"
-	bridgecodec "lina-core/pkg/pluginbridge/codec"
-	bridgecontract "lina-core/pkg/pluginbridge/contract"
+	bridgecontract "lina-core/pkg/plugin/pluginbridge/contract"
+	bridgecodec "lina-core/pkg/plugin/pluginbridge/protocol"
 )
 
 // cronDiscoveryCollector stores dynamic-plugin cron declarations discovered
@@ -105,15 +105,17 @@ func (s *serviceImpl) DiscoverCronContracts(
 	}
 
 	response, err := wasm.ExecuteBridge(ctx, wasm.ExecutionInput{
-		PluginID:        manifest.ID,
-		ArtifactPath:    manifest.RuntimeArtifact.Path,
-		BridgeSpec:      manifest.BridgeSpec,
-		Capabilities:    manifest.HostCapabilities,
-		HostServices:    manifest.HostServices,
-		ExecutionSource: bridgecontract.ExecutionSourceCronDiscovery,
-		RoutePath:       bridgecontract.DeclaredCronRegistrationInternalPath,
-		RequestID:       request.RequestID,
-		CronCollector:   collector,
+		PluginID:                  manifest.ID,
+		ArtifactPath:              manifest.RuntimeArtifact.Path,
+		BridgeSpec:                manifest.BridgeSpec,
+		Capabilities:              manifest.HostCapabilities,
+		HostServices:              manifest.HostServices,
+		ArtifactDefaultConfig:     buildArtifactDefaultConfig(manifest),
+		ArtifactManifestResources: buildArtifactManifestResources(manifest),
+		ExecutionSource:           bridgecontract.ExecutionSourceCronDiscovery,
+		RoutePath:                 bridgecontract.DeclaredCronRegistrationInternalPath,
+		RequestID:                 request.RequestID,
+		CronCollector:             collector,
 	}, requestContent)
 	if err != nil {
 		return nil, err
@@ -145,7 +147,7 @@ func (s *serviceImpl) ExecuteDeclaredCronJob(
 		PluginID: strings.TrimSpace(manifest.ID),
 		Route: &bridgecontract.RouteMatchSnapshotV1{
 			RoutePath:    bridgecontract.BuildDeclaredCronRoutePath(contract),
-			InternalPath: strings.TrimSpace(contract.InternalPath),
+			InternalPath: bridgecontract.BuildDeclaredCronRoutePath(contract),
 			RequestType:  strings.TrimSpace(contract.RequestType),
 		},
 		RequestID: guid.S(),
@@ -156,14 +158,16 @@ func (s *serviceImpl) ExecuteDeclaredCronJob(
 	}
 
 	response, err := wasm.ExecuteBridge(ctx, wasm.ExecutionInput{
-		PluginID:        manifest.ID,
-		ArtifactPath:    manifest.RuntimeArtifact.Path,
-		BridgeSpec:      manifest.BridgeSpec,
-		Capabilities:    manifest.HostCapabilities,
-		HostServices:    manifest.HostServices,
-		ExecutionSource: bridgecontract.ExecutionSourceCron,
-		RoutePath:       bridgecontract.BuildDeclaredCronRoutePath(contract),
-		RequestID:       request.RequestID,
+		PluginID:                  manifest.ID,
+		ArtifactPath:              manifest.RuntimeArtifact.Path,
+		BridgeSpec:                manifest.BridgeSpec,
+		Capabilities:              manifest.HostCapabilities,
+		HostServices:              manifest.HostServices,
+		ArtifactDefaultConfig:     buildArtifactDefaultConfig(manifest),
+		ArtifactManifestResources: buildArtifactManifestResources(manifest),
+		ExecutionSource:           bridgecontract.ExecutionSourceCron,
+		RoutePath:                 bridgecontract.BuildDeclaredCronRoutePath(contract),
+		RequestID:                 request.RequestID,
 	}, requestContent)
 	if err != nil {
 		return err

@@ -133,6 +133,8 @@ func buildPluginUpgradeHostServiceChanges(
 			ToTables:          cloneAPIStringSlice(item.ToTables),
 			FromPaths:         cloneAPIStringSlice(item.FromPaths),
 			ToPaths:           cloneAPIStringSlice(item.ToPaths),
+			FromKeys:          cloneAPIStringSlice(item.FromKeys),
+			ToKeys:            cloneAPIStringSlice(item.ToKeys),
 		})
 	}
 	return out

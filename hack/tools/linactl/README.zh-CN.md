@@ -79,6 +79,17 @@ make wasm p=linapro-demo-dynamic
 
 当测试或本地夹具需要打包`apps/lina-plugins`之外的动态插件目录时，可以使用`plugin_dir=<path>`。
 
+## GoFrame 代码生成
+
+`linactl ctrl`和`linactl dao`会直接运行内嵌在`linactl`中的`GoFrame CLI`模块；开发者不再需要单独安装`gf`，也不需要在`PATH`中提供`gf`可执行文件。
+
+```bash
+go run . ctrl
+go run . dao
+```
+
+生成流程仍使用`apps/lina-core`的`GoFrame`项目布局，并读取`apps/lina-core/hack/config.yaml`。`dao`生成仍要求配置的数据库可连接且已初始化，因此执行前需要先运行仓库初始化流程或准备等价数据库。
+
 ## 运行时 I18n 检查
 
 `linactl i18n.check`统一承载运行时`i18n`治理检查。该命令会扫描高风险运行时可见硬编码文案，并校验宿主和插件运行时消息`key`覆盖：
